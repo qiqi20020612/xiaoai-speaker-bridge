@@ -1,0 +1,4 @@
+homeassistant==2026.10.0
+pytest-homeassistant-custom-component==0.13.371
+ruff==0.17.0
+clang-format==23.1.3

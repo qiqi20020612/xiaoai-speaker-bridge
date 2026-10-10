@@ -1,0 +1,18 @@
+alias: 客厅窗户提醒
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.living_room_window
+    to: "on"
+    for: "00:05:00"
+conditions:
+  - condition: state
+    entity_id: binary_sensor.your_speaker_online
+    state: "on"
+actions:
+  - action: xiaoai_speaker.announce
+    data:
+      entity_id: media_player.your_speaker
+      text: "客厅窗户还没关。"
+      priority: normal
+      wait: true
+mode: single

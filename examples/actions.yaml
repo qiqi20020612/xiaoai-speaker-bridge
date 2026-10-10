@@ -1,0 +1,53 @@
+# Replace the entity IDs. Each document below is one separate HA action example.
+action: xiaoai_speaker.announce
+data:
+  entity_id: media_player.your_speaker
+  text: "打开灯"
+  # Only reads these words. Does not execute the command.
+  volume: 45
+  priority: normal
+  wait: true
+response_variable: spoken_result
+---
+action: xiaoai_speaker.send_text
+data:
+  entity_id: media_player.your_speaker
+  text: "打开客厅灯，然后告诉我结果"
+  use_context: true
+  speak_response: false
+  wait: true
+response_variable: conversation_result
+---
+action: xiaoai_speaker.set_volume
+data:
+  entity_id: media_player.your_speaker
+  target: tts
+  level: 40
+---
+action: xiaoai_speaker.set_idle_volume_policy
+data:
+  entity_id: media_player.your_speaker
+  policy: master_tts
+---
+action: media_player.play_media
+target:
+  entity_id: media_player.your_speaker
+data:
+  media_content_type: music
+  media_content_id: https://media.example/track.mp3
+  enqueue: replace
+---
+action: media_player.media_pause
+target:
+  entity_id: media_player.your_speaker
+---
+action: xiaoai_speaker.get_queue
+data:
+  entity_id: media_player.your_speaker
+response_variable: native_mpd_queue
+---
+action: xiaoai_speaker.get_job
+data:
+  entity_id: media_player.your_speaker
+  request_id: REPLACE_WITH_RETURNED_ID
+response_variable: job_result

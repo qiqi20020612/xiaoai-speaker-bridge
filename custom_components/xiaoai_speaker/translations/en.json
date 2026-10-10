@@ -1,0 +1,396 @@
+{
+  "title": "XiaoAI Speaker Bridge",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect XiaoAI speaker",
+        "data": {
+          "host": "Speaker IP or hostname",
+          "port": "Bridge port",
+          "token": "Bridge authentication token",
+          "mpd_port": "MPD port",
+          "mpd_password": "MPD password (optional)"
+        }
+      },
+      "reconfigure": {
+        "title": "Connect XiaoAI speaker",
+        "data": {
+          "host": "Speaker IP or hostname",
+          "port": "Bridge port",
+          "token": "Bridge authentication token",
+          "mpd_port": "MPD port",
+          "mpd_password": "MPD password (optional)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Connect XiaoAI speaker",
+        "data": {
+          "token": "Bridge authentication token"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Authentication failed",
+      "cannot_connect": "Cannot connect to speaker",
+      "invalid_input": "Invalid configuration",
+      "incompatible_protocol": "Incompatible bridge protocol"
+    },
+    "abort": {
+      "already_configured": "Device already configured",
+      "wrong_device": "Device identity does not match",
+      "reauth_successful": "Authentication updated",
+      "reconfigure_successful": "Configuration updated"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Volume and state options",
+        "data": {
+          "idle_policy": "Idle volume target",
+          "poll_interval": "Health poll interval (seconds)",
+          "source_priority": "Source priority"
+        }
+      }
+    }
+  },
+  "entity": {
+    "number": {
+      "volume_master": {
+        "name": "Master volume"
+      },
+      "volume_tts": {
+        "name": "TTS volume"
+      },
+      "volume_bluetooth": {
+        "name": "Bluetooth volume"
+      },
+      "volume_headphone": {
+        "name": "Headphone volume"
+      },
+      "volume_airplay": {
+        "name": "AirPlay volume"
+      }
+    },
+    "sensor": {
+      "uptime": {
+        "name": "Uptime"
+      },
+      "memory_available": {
+        "name": "Available memory"
+      },
+      "memory_total": {
+        "name": "Total memory"
+      },
+      "cpu_load": {
+        "name": "CPU load"
+      },
+      "bridge_rss": {
+        "name": "Bridge RSS"
+      },
+      "bridge_peak_rss": {
+        "name": "Bridge peak RSS"
+      },
+      "active_source": {
+        "name": "Active source"
+      },
+      "job_status": {
+        "name": "Job status"
+      },
+      "queue_size": {
+        "name": "Queue size"
+      },
+      "airplay_volume": {
+        "name": "AirPlay volume"
+      },
+      "airplay_raw_volume": {
+        "name": "AirPlay raw volume"
+      },
+      "conversation_remaining": {
+        "name": "Conversation remaining"
+      }
+    },
+    "binary_sensor": {
+      "online": {
+        "name": "Online"
+      },
+      "voice_active": {
+        "name": "Voice active"
+      },
+      "airplay_active": {
+        "name": "AirPlay active"
+      },
+      "source_uncertain": {
+        "name": "Source uncertain"
+      }
+    },
+    "switch": {
+      "listener": {
+        "name": "Listening"
+      }
+    },
+    "button": {
+      "refresh": {
+        "name": "Refresh"
+      },
+      "reset_context": {
+        "name": "Reset conversation"
+      },
+      "restart_listener": {
+        "name": "Restart listening"
+      }
+    },
+    "select": {
+      "idle_policy": {
+        "name": "Idle volume policy",
+        "state": {
+          "master": "Master",
+          "tts": "TTS",
+          "master_tts": "Master and TTS"
+        }
+      },
+      "agent": {
+        "name": "Conversation agent"
+      }
+    },
+    "light": {
+      "led": {
+        "name": "LED ring"
+      }
+    }
+  },
+  "services": {
+    "announce": {
+      "name": "Announce text",
+      "description": "Announce text",
+      "fields": {
+        "device_id": {
+          "name": "Speaker device",
+          "description": "Speaker device"
+        },
+        "entity_id": {
+          "name": "Speaker entity",
+          "description": "Speaker entity"
+        },
+        "text": {
+          "name": "Text",
+          "description": "Text"
+        },
+        "volume": {
+          "name": "Temporary announcement volume",
+          "description": "Temporary announcement volume"
+        },
+        "priority": {
+          "name": "Priority",
+          "description": "Priority"
+        },
+        "request_id": {
+          "name": "Unique request ID",
+          "description": "Unique request ID"
+        },
+        "wait": {
+          "name": "Wait for completion",
+          "description": "Wait for completion"
+        }
+      }
+    },
+    "send_text": {
+      "name": "Send conversation text",
+      "description": "Send conversation text",
+      "fields": {
+        "device_id": {
+          "name": "Speaker device",
+          "description": "Speaker device"
+        },
+        "entity_id": {
+          "name": "Speaker entity",
+          "description": "Speaker entity"
+        },
+        "text": {
+          "name": "Text",
+          "description": "Text"
+        },
+        "speak_response": {
+          "name": "Speak response",
+          "description": "Speak response"
+        },
+        "use_context": {
+          "name": "Use shared context",
+          "description": "Use shared context"
+        },
+        "agent_id": {
+          "name": "Conversation agent override",
+          "description": "Conversation agent override"
+        },
+        "priority": {
+          "name": "Priority",
+          "description": "Priority"
+        },
+        "request_id": {
+          "name": "Unique request ID",
+          "description": "Unique request ID"
+        },
+        "wait": {
+          "name": "Wait for completion",
+          "description": "Wait for completion"
+        }
+      }
+    },
+    "set_volume": {
+      "name": "Set channel volume",
+      "description": "Set channel volume",
+      "fields": {
+        "device_id": {
+          "name": "Speaker device",
+          "description": "Speaker device"
+        },
+        "entity_id": {
+          "name": "Speaker entity",
+          "description": "Speaker entity"
+        },
+        "target": {
+          "name": "Volume target",
+          "description": "Volume target"
+        },
+        "level": {
+          "name": "Volume percent",
+          "description": "Volume percent"
+        }
+      }
+    },
+    "volume_up": {
+      "name": "Increase volume",
+      "description": "Increase volume",
+      "fields": {
+        "device_id": {
+          "name": "Speaker device",
+          "description": "Speaker device"
+        },
+        "entity_id": {
+          "name": "Speaker entity",
+          "description": "Speaker entity"
+        },
+        "target": {
+          "name": "Volume target",
+          "description": "Volume target"
+        },
+        "step": {
+          "name": "Adjustment step",
+          "description": "Adjustment step"
+        }
+      }
+    },
+    "volume_down": {
+      "name": "Decrease volume",
+      "description": "Decrease volume",
+      "fields": {
+        "device_id": {
+          "name": "Speaker device",
+          "description": "Speaker device"
+        },
+        "entity_id": {
+          "name": "Speaker entity",
+          "description": "Speaker entity"
+        },
+        "target": {
+          "name": "Volume target",
+          "description": "Volume target"
+        },
+        "step": {
+          "name": "Adjustment step",
+          "description": "Adjustment step"
+        }
+      }
+    },
+    "cancel_job": {
+      "name": "Cancel a job",
+      "description": "Cancel a job",
+      "fields": {
+        "device_id": {
+          "name": "Speaker device",
+          "description": "Speaker device"
+        },
+        "entity_id": {
+          "name": "Speaker entity",
+          "description": "Speaker entity"
+        },
+        "request_id": {
+          "name": "Unique request ID",
+          "description": "Unique request ID"
+        }
+      }
+    },
+    "get_job": {
+      "name": "Read job status",
+      "description": "Read job status",
+      "fields": {
+        "device_id": {
+          "name": "Speaker device",
+          "description": "Speaker device"
+        },
+        "entity_id": {
+          "name": "Speaker entity",
+          "description": "Speaker entity"
+        },
+        "request_id": {
+          "name": "Unique request ID",
+          "description": "Unique request ID"
+        }
+      }
+    },
+    "set_idle_volume_policy": {
+      "name": "Set idle volume policy",
+      "description": "Set idle volume policy",
+      "fields": {
+        "device_id": {
+          "name": "Speaker device",
+          "description": "Speaker device"
+        },
+        "entity_id": {
+          "name": "Speaker entity",
+          "description": "Speaker entity"
+        },
+        "policy": {
+          "name": "Idle policy",
+          "description": "Idle policy"
+        }
+      }
+    },
+    "get_queue": {
+      "name": "Read MPD queue",
+      "description": "Read MPD queue",
+      "fields": {
+        "device_id": {
+          "name": "Speaker device",
+          "description": "Speaker device"
+        },
+        "entity_id": {
+          "name": "Speaker entity",
+          "description": "Speaker entity"
+        }
+      }
+    },
+    "send_ir": {
+      "name": "Send infrared code",
+      "description": "Send infrared code",
+      "fields": {
+        "device_id": {
+          "name": "Speaker device",
+          "description": "Speaker device"
+        },
+        "entity_id": {
+          "name": "Speaker entity",
+          "description": "Speaker entity"
+        },
+        "code": {
+          "name": "Comma-separated infrared pulses",
+          "description": "Comma-separated infrared pulses"
+        },
+        "carrier": {
+          "name": "Carrier frequency",
+          "description": "Carrier frequency"
+        }
+      }
+    }
+  }
+}

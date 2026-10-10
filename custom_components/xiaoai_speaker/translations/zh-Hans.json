@@ -1,0 +1,396 @@
+{
+  "title": "XiaoAI Speaker Bridge",
+  "config": {
+    "step": {
+      "user": {
+        "title": "连接小爱音箱",
+        "data": {
+          "host": "音箱 IP 或主机名",
+          "port": "桥接端口",
+          "token": "桥接认证令牌",
+          "mpd_port": "MPD 端口",
+          "mpd_password": "MPD 密码（可选）"
+        }
+      },
+      "reconfigure": {
+        "title": "连接小爱音箱",
+        "data": {
+          "host": "音箱 IP 或主机名",
+          "port": "桥接端口",
+          "token": "桥接认证令牌",
+          "mpd_port": "MPD 端口",
+          "mpd_password": "MPD 密码（可选）"
+        }
+      },
+      "reauth_confirm": {
+        "title": "连接小爱音箱",
+        "data": {
+          "token": "桥接认证令牌"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "认证失败",
+      "cannot_connect": "无法连接音箱",
+      "invalid_input": "配置格式无效",
+      "incompatible_protocol": "桥接协议不兼容"
+    },
+    "abort": {
+      "already_configured": "设备已配置",
+      "wrong_device": "设备身份不匹配",
+      "reauth_successful": "认证已更新",
+      "reconfigure_successful": "配置已更新"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "音量和状态选项",
+        "data": {
+          "idle_policy": "空闲音量对象",
+          "poll_interval": "健康检查间隔（秒）",
+          "source_priority": "音源优先级"
+        }
+      }
+    }
+  },
+  "entity": {
+    "number": {
+      "volume_master": {
+        "name": "主音量"
+      },
+      "volume_tts": {
+        "name": "播报音量"
+      },
+      "volume_bluetooth": {
+        "name": "蓝牙音量"
+      },
+      "volume_headphone": {
+        "name": "耳机音量"
+      },
+      "volume_airplay": {
+        "name": "AirPlay 音量"
+      }
+    },
+    "sensor": {
+      "uptime": {
+        "name": "运行时间"
+      },
+      "memory_available": {
+        "name": "可用内存"
+      },
+      "memory_total": {
+        "name": "总内存"
+      },
+      "cpu_load": {
+        "name": "CPU 负载"
+      },
+      "bridge_rss": {
+        "name": "桥接常驻内存"
+      },
+      "bridge_peak_rss": {
+        "name": "桥接峰值内存"
+      },
+      "active_source": {
+        "name": "当前音源"
+      },
+      "job_status": {
+        "name": "任务状态"
+      },
+      "queue_size": {
+        "name": "排队数量"
+      },
+      "airplay_volume": {
+        "name": "AirPlay 音量"
+      },
+      "airplay_raw_volume": {
+        "name": "AirPlay 原始音量"
+      },
+      "conversation_remaining": {
+        "name": "会话剩余时间"
+      }
+    },
+    "binary_sensor": {
+      "online": {
+        "name": "在线"
+      },
+      "voice_active": {
+        "name": "语音交互中"
+      },
+      "airplay_active": {
+        "name": "AirPlay 活跃"
+      },
+      "source_uncertain": {
+        "name": "音源不确定"
+      }
+    },
+    "switch": {
+      "listener": {
+        "name": "语音监听"
+      }
+    },
+    "button": {
+      "refresh": {
+        "name": "刷新状态"
+      },
+      "reset_context": {
+        "name": "重置会话"
+      },
+      "restart_listener": {
+        "name": "重启监听"
+      }
+    },
+    "select": {
+      "idle_policy": {
+        "name": "空闲音量策略",
+        "state": {
+          "master": "主音量",
+          "tts": "播报音量",
+          "master_tts": "主音量和播报"
+        }
+      },
+      "agent": {
+        "name": "对话代理"
+      }
+    },
+    "light": {
+      "led": {
+        "name": "LED 灯环"
+      }
+    }
+  },
+  "services": {
+    "announce": {
+      "name": "主动播报",
+      "description": "主动播报",
+      "fields": {
+        "device_id": {
+          "name": "音箱设备",
+          "description": "音箱设备"
+        },
+        "entity_id": {
+          "name": "音箱实体",
+          "description": "音箱实体"
+        },
+        "text": {
+          "name": "文本",
+          "description": "文本"
+        },
+        "volume": {
+          "name": "本次播报音量",
+          "description": "本次播报音量"
+        },
+        "priority": {
+          "name": "优先级",
+          "description": "优先级"
+        },
+        "request_id": {
+          "name": "唯一请求标识",
+          "description": "唯一请求标识"
+        },
+        "wait": {
+          "name": "等待完成",
+          "description": "等待完成"
+        }
+      }
+    },
+    "send_text": {
+      "name": "远程文字对话",
+      "description": "远程文字对话",
+      "fields": {
+        "device_id": {
+          "name": "音箱设备",
+          "description": "音箱设备"
+        },
+        "entity_id": {
+          "name": "音箱实体",
+          "description": "音箱实体"
+        },
+        "text": {
+          "name": "文本",
+          "description": "文本"
+        },
+        "speak_response": {
+          "name": "播报回复",
+          "description": "播报回复"
+        },
+        "use_context": {
+          "name": "使用共享上下文",
+          "description": "使用共享上下文"
+        },
+        "agent_id": {
+          "name": "本次对话代理",
+          "description": "本次对话代理"
+        },
+        "priority": {
+          "name": "优先级",
+          "description": "优先级"
+        },
+        "request_id": {
+          "name": "唯一请求标识",
+          "description": "唯一请求标识"
+        },
+        "wait": {
+          "name": "等待完成",
+          "description": "等待完成"
+        }
+      }
+    },
+    "set_volume": {
+      "name": "设置音量",
+      "description": "设置音量",
+      "fields": {
+        "device_id": {
+          "name": "音箱设备",
+          "description": "音箱设备"
+        },
+        "entity_id": {
+          "name": "音箱实体",
+          "description": "音箱实体"
+        },
+        "target": {
+          "name": "音量对象",
+          "description": "音量对象"
+        },
+        "level": {
+          "name": "音量百分比",
+          "description": "音量百分比"
+        }
+      }
+    },
+    "volume_up": {
+      "name": "增大音量",
+      "description": "增大音量",
+      "fields": {
+        "device_id": {
+          "name": "音箱设备",
+          "description": "音箱设备"
+        },
+        "entity_id": {
+          "name": "音箱实体",
+          "description": "音箱实体"
+        },
+        "target": {
+          "name": "音量对象",
+          "description": "音量对象"
+        },
+        "step": {
+          "name": "调整步长",
+          "description": "调整步长"
+        }
+      }
+    },
+    "volume_down": {
+      "name": "减小音量",
+      "description": "减小音量",
+      "fields": {
+        "device_id": {
+          "name": "音箱设备",
+          "description": "音箱设备"
+        },
+        "entity_id": {
+          "name": "音箱实体",
+          "description": "音箱实体"
+        },
+        "target": {
+          "name": "音量对象",
+          "description": "音量对象"
+        },
+        "step": {
+          "name": "调整步长",
+          "description": "调整步长"
+        }
+      }
+    },
+    "cancel_job": {
+      "name": "取消任务",
+      "description": "取消任务",
+      "fields": {
+        "device_id": {
+          "name": "音箱设备",
+          "description": "音箱设备"
+        },
+        "entity_id": {
+          "name": "音箱实体",
+          "description": "音箱实体"
+        },
+        "request_id": {
+          "name": "唯一请求标识",
+          "description": "唯一请求标识"
+        }
+      }
+    },
+    "get_job": {
+      "name": "查询任务",
+      "description": "查询任务",
+      "fields": {
+        "device_id": {
+          "name": "音箱设备",
+          "description": "音箱设备"
+        },
+        "entity_id": {
+          "name": "音箱实体",
+          "description": "音箱实体"
+        },
+        "request_id": {
+          "name": "唯一请求标识",
+          "description": "唯一请求标识"
+        }
+      }
+    },
+    "set_idle_volume_policy": {
+      "name": "设置空闲音量策略",
+      "description": "设置空闲音量策略",
+      "fields": {
+        "device_id": {
+          "name": "音箱设备",
+          "description": "音箱设备"
+        },
+        "entity_id": {
+          "name": "音箱实体",
+          "description": "音箱实体"
+        },
+        "policy": {
+          "name": "空闲策略",
+          "description": "空闲策略"
+        }
+      }
+    },
+    "get_queue": {
+      "name": "读取 MPD 队列",
+      "description": "读取 MPD 队列",
+      "fields": {
+        "device_id": {
+          "name": "音箱设备",
+          "description": "音箱设备"
+        },
+        "entity_id": {
+          "name": "音箱实体",
+          "description": "音箱实体"
+        }
+      }
+    },
+    "send_ir": {
+      "name": "发送红外码",
+      "description": "发送红外码",
+      "fields": {
+        "device_id": {
+          "name": "音箱设备",
+          "description": "音箱设备"
+        },
+        "entity_id": {
+          "name": "音箱实体",
+          "description": "音箱实体"
+        },
+        "code": {
+          "name": "逗号分隔的红外脉冲",
+          "description": "逗号分隔的红外脉冲"
+        },
+        "carrier": {
+          "name": "载波频率",
+          "description": "载波频率"
+        }
+      }
+    }
+  }
+}

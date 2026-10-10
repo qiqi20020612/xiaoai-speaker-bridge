@@ -1,0 +1,23 @@
+# Optional native HA UI. Add input_text helpers through HA; no external frontend.
+# The text helper is limited to 255 characters; the action itself supports 4096 bytes.
+type: vertical-stack
+cards:
+  - type: media-control
+    entity: media_player.your_speaker
+  - type: entities
+    entities:
+      - input_text.speaker_conversation
+      - number.your_speaker_tts_volume
+      - select.your_speaker_idle_volume_policy
+  - type: button
+    name: 对话并执行
+    icon: mdi:message-text
+    tap_action:
+      action: perform-action
+      perform_action: script.speaker_send_text
+  - type: button
+    name: 仅朗读
+    icon: mdi:bullhorn
+    tap_action:
+      action: perform-action
+      perform_action: script.speaker_read_text

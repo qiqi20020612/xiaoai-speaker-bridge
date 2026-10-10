@@ -1,0 +1,20 @@
+{
+  "bind": "0.0.0.0",
+  "port": 8766,
+  "device_id": "GENERATE-A-UUID-ONCE",
+  "name": "XiaoAI Speaker",
+  "token": "REPLACE-WITH-A-RANDOM-64-CHARACTER-TOKEN",
+  "allowlist": [],
+  "task_timeout": 180,
+  "adapter": "/data/xiaoai_bridge/lib/device.sh",
+  "listener_config": "/data/listener",
+  "tts_path": "/data/tts_doubao",
+  "enable_listener_adapter": false,
+  "verified": {
+    "airplay_volume": false,
+    "airplay_playback": false,
+    "bluetooth_playback": false,
+    "led": false,
+    "infrared": false
+  }
+}
