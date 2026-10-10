@@ -8,6 +8,8 @@
 
 在 GitHub CI 中下载 `generic-two-end-packages`，内含 HA ZIP、ARM hard-float 音箱包及校验值。包中没有配置令牌或任何具体设备的适配副本。
 
+解压 CI 产物后，在包含两个安装包及 `SHA256SUMS` 的同一目录执行 `sha256sum --check SHA256SUMS`，全部通过后再准备部署副本。
+
 也可以使用校验过的 Zig 0.14.1 交叉编译器：
 
 ```sh
