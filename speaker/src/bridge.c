@@ -957,8 +957,10 @@ static int server(void) {
     fcntl(lock, F_SETFD, FD_CLOEXEC);
     char pid[32];
     int pn = snprintf(pid, sizeof pid, "%ld\n", (long)getpid());
-    ftruncate(lock, 0);
-    write(lock, pid, (size_t)pn);
+    if (ftruncate(lock, 0) < 0 || write(lock, pid, (size_t)pn) != pn) {
+        close(lock);
+        return 2;
+    }
     listening = socket(AF_INET, SOCK_STREAM, 0);
     if (listening < 0)
         return 2;
@@ -1174,7 +1176,10 @@ static int health(void) {
                      "GET /api/health HTTP/1.1\r\nHost: "
                      "localhost\r\nAuthorization: Bearer %s\r\n\r\n",
                      cfg.token);
-    write(fd, req, (size_t)n);
+    if (write(fd, req, (size_t)n) != n) {
+        close(fd);
+        return 1;
+    }
     char response_body[1024];
     ssize_t received = read(fd, response_body, sizeof response_body - 1);
     close(fd);
