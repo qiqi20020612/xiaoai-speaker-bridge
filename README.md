@@ -10,21 +10,21 @@ Home Assistant 2026.10 自定义集成，以及 LX06 `/data` 下的轻量受控�
 
 ```mermaid
 flowchart LR
-    subgraph HA[Home Assistant 进程]
-        integration[custom_components/xiaoai_speaker<br/>规则、持久期望值、队列、实体、多设备]
-        conversation[现有 Conversation API / Agent]
+    subgraph HA["Home Assistant 进程"]
+        integration["custom_components/xiaoai_speaker<br/>规则、持久期望值、队列、实体、多设备"]
+        conversation["现有 Conversation API / Agent"]
     end
-    subgraph LX[LX06 音箱]
-        bridge[/data/xiaoai_bridge<br/>C HTTP 受控端与按需脚本]
-        mpd[现有 MPD]
-        voice[现有 KWS / STT / Agent / TTS<br/>共享文本入口与本地互斥]
-        hardware[ALSA / Shairport / BlueZ / LED / IR]
+    subgraph LX["LX06 音箱"]
+        bridge["/data/xiaoai_bridge<br/>C HTTP 受控端与按需脚本"]
+        mpd["现有 MPD"]
+        voice["现有 KWS / STT / Agent / TTS<br/>共享文本入口与本地互斥"]
+        hardware["ALSA / Shairport / BlueZ / LED / IR"]
     end
-    integration <-->|认证 HTTP / 状态事件| bridge
-    integration <-->|MPD 原生协议| mpd
+    integration <-->|"认证 HTTP / 状态事件"| bridge
+    integration <-->|"MPD 原生协议"| mpd
     bridge --> voice
-    voice -->|音箱发起文字对话| conversation
-    conversation -->|回复由音箱播报| voice
+    voice -->|"音箱发起文字对话"| conversation
+    conversation -->|"回复由音箱播报"| voice
     bridge <--> hardware
 ```
 
