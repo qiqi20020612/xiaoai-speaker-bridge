@@ -2,7 +2,7 @@
 
 ## 自动化
 
-CI 使用 Python 3.14、Home Assistant 2026.10.0、官方 HA fixture 的 custom-component 包；依赖固定于 `requirements-dev.txt`。HA 2026.10 实际校验库为 probatio，本集成按此环境进行配置流/动作 schema 测试。Linux CI 强制安装并核对真实 BusyBox **1.36.1**，设置 `XIAOAI_TEST_BUSYBOX=/usr/bin/busybox`；Shell 回归用它的 `ash` 和真实 `flock`。macOS 本地仅用拒绝 GNU 参数的后备 FD 实现，真实 BusyBox 专项会跳过，不能代替 Linux CI。
+CI 使用 Python 3.14、Home Assistant 2026.10.0、官方 HA fixture 的 custom-component 包；依赖固定于 `requirements-dev.txt`。HA 2026.10 实际校验库为 probatio，本集成按此环境进行配置流/动作 schema 测试。Linux CI 从官方发布包构建真实 BusyBox **1.36.1**，固定并核验源码 SHA-256，使用 `tests/busybox.config` 明确启用 `ash` 和 `flock`，校验版本及两个 applet 后设置 `XIAOAI_TEST_BUSYBOX`；Shell 回归用它的 `ash` 和真实 `flock`。Ubuntu 自带 BusyBox 包没有 `flock`，不能用它替代。macOS 本地仅用拒绝 GNU 参数的后备 FD 实现，真实 BusyBox 专项会跳过，不能代替 Linux CI。
 
 | 测试 | 覆盖 |
 |---|---|

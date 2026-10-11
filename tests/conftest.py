@@ -19,6 +19,10 @@ def busybox_binary():
     path = Path(configured).resolve()
     result = subprocess.run([str(path)], capture_output=True, text=True)
     assert "BusyBox v1.36.1" in result.stdout + result.stderr
+    applets = subprocess.run(
+        [str(path), "--list"], check=True, capture_output=True, text=True
+    ).stdout.splitlines()
+    assert {"ash", "flock"} <= set(applets), "BusyBox must include ash and flock"
     return str(path)
 
 

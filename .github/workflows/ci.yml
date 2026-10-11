@@ -24,12 +24,26 @@ jobs:
           python-version: "3.14"
           cache: pip
       - run: python -m pip install -r requirements-dev.txt
-      - name: Require actual BusyBox 1.36.1 ash and flock
+      - name: Build checksum-verified BusyBox 1.36.1 ash and flock
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq busybox
-          /usr/bin/busybox 2>&1 | head -n 1 | grep 'BusyBox v1.36.1'
-          echo 'XIAOAI_TEST_BUSYBOX=/usr/bin/busybox' >> "$GITHUB_ENV"
+          mkdir -p build
+          curl --fail --location --retry 3 https://busybox.net/downloads/busybox-1.36.1.tar.bz2 --output build/busybox-1.36.1.tar.bz2
+          printf '%s\n' 'b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314  build/busybox-1.36.1.tar.bz2' | sha256sum --check
+          tar -xjf build/busybox-1.36.1.tar.bz2 -C build
+          make -C build/busybox-1.36.1 allnoconfig > build/busybox-config.log
+          while IFS= read -r setting; do
+            case "$setting" in CONFIG_*=y)
+              option=${setting%=y}
+              sed -i "s/^# $option is not set$/$setting/" build/busybox-1.36.1/.config
+            esac
+          done < tests/busybox.config
+          make -C build/busybox-1.36.1 oldconfig < /dev/null >> build/busybox-config.log
+          make -j2 -C build/busybox-1.36.1 busybox
+          build/busybox-1.36.1/busybox > build/busybox-version.txt 2>&1
+          grep -F 'BusyBox v1.36.1' build/busybox-version.txt
+          build/busybox-1.36.1/busybox --list | grep -Fx ash
+          build/busybox-1.36.1/busybox --list | grep -Fx flock
+          echo "XIAOAI_TEST_BUSYBOX=$PWD/build/busybox-1.36.1/busybox" >> "$GITHUB_ENV"
       - name: Privacy and integration metadata
         run: |
           python tools/privacy_audit.py
