@@ -10,12 +10,19 @@ BIN=$DIR/bin/xiaoai_bridge
 PIDFILE=$RUNTIME/xiaoai_bridge.pid
 LOG=$RUNTIME/xiaoai_bridge.log
 LOCK=$RUNTIME/xiaoai_bridge.start.lock
+ACTION=${1:-start}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$SCRIPT_DIR/lib/locks.sh"
 export XIAOAI_BRIDGE_DIR="$DIR" XIAOAI_BRIDGE_RUNTIME="$RUNTIME" XIAOAI_BRIDGE_CONFIG="$CONFIG"
-[ -x "$BIN" ] && [ -r "$CONFIG" ] || exit 1
-"$BIN" --check-config || exit 1
+case "$ACTION" in start|stop|status|restart) ;; *) exit 2 ;; esac
+# Recovery can stop our process with a missing/broken config or binary.
+if [ "$ACTION" != stop ];then
+    [ -x "$BIN" ] && [ -r "$CONFIG" ] || exit 1
+    "$BIN" --check-config || exit 1
+fi
 command -v flock >/dev/null 2>&1 || exit 1
 exec 9> "$LOCK"
-flock -w 5 9 || exit 1
+bridge_lock_for 5 9 || exit 1
 
 owned_pid() {
     [ -r "$PIDFILE" ] || return 1
@@ -23,7 +30,7 @@ owned_pid() {
     case "$owner" in ''|*[!0-9]*) return 1 ;; esac
     [ "$owner" -gt 1 ] && kill -0 "$owner" 2>/dev/null || return 1
     # PID reuse must never authorize stopping another process.
-    if [ -r "/proc/$owner/exe" ]; then
+    if [ -L "/proc/$owner/exe" ]; then
         running=$(readlink "/proc/$owner/exe" 2>/dev/null || true)
         [ "$running" = "$BIN" ] || [ "$running" = "$BIN (deleted)" ] || return 1
     else
@@ -43,7 +50,7 @@ stop_bridge() {
     rm -f "$PIDFILE"
 }
 
-case "${1:-start}" in
+case "$ACTION" in
     status) owned_pid && "$BIN" --health;exit $? ;;
     stop) stop_bridge;exit $? ;;
     restart) stop_bridge ;;

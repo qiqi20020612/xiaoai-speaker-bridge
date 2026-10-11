@@ -55,11 +55,13 @@ sh /tmp/xiaoai_bridge/install.sh --apply
 
 安装器：
 
-- 验证通用包 SHA256，备份原 boot、Cron 和已有 bridge；已有备份/暂存目录存在时拒绝覆盖。
+- 验证通用包 SHA256，保存原 boot、Cron 和已有 bridge 的不可变快照；备份有明确事务状态，已完成/恢复的旧备份以唯一名称保留，不覆盖。
 - 原子切换 `/data/xiaoai_bridge/`，新安装生成一次随机设备 UUID 与 64 位十六进制桥接令牌；升级保留原配置和私有适配。
 - 保留所有原 Cron 行，只去重并补充标准 boot 行；更新已有 `/data/xiaoai_boot.sh`，不另建启动服务。
 - 不改只读固件；不关闭 Snapclient/upmpdcli；不清除已完成的 boot 标志，也不因为升级重复停用临时手动开启的 Squeezelite。
-- 启动固定 `start.sh` 并检查 `/api/health` 就绪，失败时返回非零并保留回滚资料。
+- 启动固定 `start.sh` 并检查 `/api/health` 就绪；失败时返回非零，自动恢复原 boot 和自己的 Cron 变更，并保留失败副本、设备身份和配置以供重试。恢复失败会标记 `recovery_required`，要求先运行新版 `--rollback`。
+
+所有音箱 Shell 锁使用 BusyBox 支持的 `-s/-x/-u/-n`。超时锁通过 `lib/locks.sh` 使用同一个继承 FD、非阻塞独占锁和 1 秒粒度的有界等待；Linux 读取 `/proc/uptime` 检查单调截止时间。原 3/5/120 秒预算保持，无无限等待，不删除锁文件。`--dry-run` 也会在只读 FD 上试用实际锁接口。安装器另持有 boot 的内核锁，阻止旧 Cron 在目录切换/恢复期间启动半安装的桥接。
 
 新包首次启动默认不启用语音副本。原 listener 继续运行；在 voice hooks 未就绪时，播报/远程对话和可能被旧恢复覆盖的主/蓝牙音量写入会明确受限。随后必须完成共享入口启用，不能把这种保护状态当成功能验收。
 
@@ -121,6 +123,34 @@ sh /tmp/xiaoai_bridge/install.sh --rollback
 sh /tmp/xiaoai_bridge/install.sh --uninstall
 ```
 
-回滚先移除已启用的适配、恢复原 listener，再恢复旧 bridge 和 boot。首次安装无旧 bridge 时移除 active 路径。当前 Cron 保留，包括安装之后新增的任务；boot 行在桥接缺失时仍安全。失败/卸载目录和备份保留，需用户审阅后归档，后续升级不覆写这些目录。
+回滚使用**运行中的新版安装包**的 `start.sh stop`，不会调用坏的已安装脚本；停止不需要配置文件或二进制完整，PID 必须属于桥接才会发送 TERM。先安全移除自己的 LED/语音引用，保留当前 OAuth/Agent/KWS/STT/TTS 参数，再恢复原 boot/已有 bridge。回滚后的旧 bridge 适配关闭，使用原语音链路；需要桥接语音入口时另行审核并启用。
+
+首次安装无旧 bridge 时移除 active 路径。Cron 仅撤销此次新增的标准 boot 行，原来已有的行和安装后新加的任务保留，不整份恢复旧 Cron。失败、暂存、旧 `previous`、卸载目录和快照以唯一名称保留，重复回滚/卸载安全。重装保留设备 UUID/token 和私有副本；先检查 `/data` 余量，再决定何时把已审阅的旧资料归档到工作站。
 
 卸载 HA 集成只停止 HA 端任务和订阅。音箱原语音依然工作。如需同时卸载 LX06 bridge，先用上述安装器恢复 adapter，再删除 HA 集成。**不要先手工删除 bridge 文件，否则仍被原启动链/LED 引用的 helper 会缺失。**
+
+## 8. 从 0.1.0 的 BusyBox 启动失败状态恢复
+
+适用于 `--apply` 已写 boot/Cron，但 `flock: invalid option -- 'w'` 导致启动失败的现场。使用 **0.1.1 或之后成功 CI 的完整通用包**，不要再运行旧安装目录中的停止/回滚脚本，也不要先删备份、配置或手工改 Cron。
+
+把下载的修复包放到音箱 `/tmp/xiaoai-bridge-armhf.tar.gz`，由安装者在音箱本地执行：
+
+```sh
+(
+set -eu
+mkdir -p /tmp/xiaoai_bridge_repair
+tar -xzf /tmp/xiaoai-bridge-armhf.tar.gz -C /tmp/xiaoai_bridge_repair
+cd /tmp/xiaoai_bridge_repair/xiaoai_bridge
+sha256sum -c SHA256SUMS
+sh install.sh --dry-run
+sh install.sh --rollback
+sh install.sh --apply
+/data/xiaoai_bridge/start.sh status
+)
+```
+
+每一步检查退出状态，失败就停在该步骤。新版回滚识别没有事务标记的 0.1.0 备份，用新工具停止自己的进程，恢复备份 boot、保留当前 Cron 的其他任务，把坏目录保留为 `.failed`（有同名时编号）。旧 `.previous` 收入备份、半写入 `.new` 保留为 `.incomplete`，不会覆盖这些资料。当前部分安装中的 UUID/token/private adapter 保存在本机 `backup/retry`；下一次 `--apply` 自动保留旧快照并复用该配置，避免更换设备身份。
+
+如果根本没有备份，`--rollback` 会明确拒绝猜测原文件；改用同一修复包的 `sh install.sh --uninstall` 安全脱离部分安装，再执行 `--apply`。卸载保留 Squeezelite 的 boot/Cron 契约，只有确实存在桥接 include 时才重启原 listener。遇到语音活动、独立更新的 boot/LED、并发 OAuth/Cron 更新或服务退出/恢复超时，保留资料、检查原因后重试，不强行覆盖。
+
+新版本的 `--apply` 启动失败后通常已自动恢复，`backup/status` 为 `failed_restored`；排除日志原因后直接再次 `--apply`。若为 `recovery_required`/`replacing`/`prepared`，先用同一个完整修复包 `--rollback`。`backup_incomplete` 表示尚未切换 active 路径，可以直接重试 `--apply`。日志与私有配置、备份、实际设备信息都留在本机，不加入公有仓库。

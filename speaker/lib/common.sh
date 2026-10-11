@@ -5,6 +5,7 @@ BRIDGE_CONFIG=${XIAOAI_BRIDGE_CONFIG:-/data/xiaoai_bridge/config.json}
 BRIDGE_RUNTIME=${XIAOAI_BRIDGE_RUNTIME:-/tmp}
 BRIDGE_DIR=${XIAOAI_BRIDGE_DIR:-/data/xiaoai_bridge}
 BRIDGE_BIN=${XIAOAI_BRIDGE_BIN:-$BRIDGE_DIR/bin/xiaoai_bridge}
+. "${XIAOAI_BRIDGE_HELPER_DIR:-$BRIDGE_DIR/lib}/locks.sh"
 
 fail() { printf '{"error":"%s"}\n' "$1"; exit 1; }
 config_value() { jq -r "$1" "$BRIDGE_CONFIG" 2>/dev/null; }
@@ -74,7 +75,7 @@ volume_write() (
     printf '%s' "$level" | grep -Eq '^[0-9]+([.][0-9]+)?$' || fail invalid_volume
     awk -v n="$level" 'BEGIN {exit !(n>=0 && n<=100)}' || fail invalid_volume
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
-    flock -w 3 7 || fail busy
+    bridge_lock_for 3 7 || fail busy
     if [ "$channel" = airplay ]; then
         flag '.verified.airplay_volume' || fail unsupported_volume_target
         [ "$(dbus_get_all org.gnome.ShairportSync.RemoteControl | dbus_property Available)" = true ] || fail volume_unavailable

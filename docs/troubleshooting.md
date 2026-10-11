@@ -16,7 +16,8 @@
 | state_stale | probe 失败，实体暂不可用；本机只读检查依赖，不填假数据 |
 | MPD 不可用 | 原生端口/密码/commands 权限；无需安装 Linn，不能以 MPD 命令代替蓝牙/AirPlay |
 | 启动后没有 done | boot 等待至少 90 秒；stop 异步最多等 15 秒，bridge 健康失败会让 Cron 下次重试 |
-| 备份或 staging 已存在 | 先审阅/归档现有备份和 failed/previous/uninstalled 目录；安装器不会覆盖它们 |
+| `flock: invalid option -- 'w'` / 0.1.0 部分安装 | 使用 0.1.1+ 完整修复包在 `/tmp` 运行新版 `--rollback`，再 `--apply`；见 [恢复步骤](install.md#8-从-010-的-busybox-启动失败状态恢复) |
+| 备份或 staging 已存在 | 看 `backup/status`；未完成/旧无标记事务先新版 `--rollback`/`--uninstall`。已恢复状态可直接重试，旧副本编号保留，不能先删除私有配置 |
 | 修改并发/哈希不符 | 原脚本/OAuth 更新了；重新只读获取、生成、审阅，不能覆盖刷新后的配置 |
 
 本机日志只有 `/tmp/xiaoai_boot.log` 和 `/tmp/xiaoai_bridge.log`，有界轮转；worker stderr 不进入永久日志。HA 的集成诊断已去除身份和对话字段，发 Issue 前仍应检查内容。不要发原 `/data/listener`、完整 private 目录、token、配置包或会话缓存。

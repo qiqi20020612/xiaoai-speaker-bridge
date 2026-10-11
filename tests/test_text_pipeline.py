@@ -17,26 +17,10 @@ def script(path, text):
 
 
 @pytest.fixture
-def text_device(tmp_path):
+def text_device(tmp_path, install_flock, speaker_shell):
     tools = tmp_path / "tools"
     tools.mkdir()
-    script(
-        tools / "flock",
-        f"""#!{sys.executable}
-import fcntl,sys,time,os
-args=sys.argv[1:]
-if args[0]=='-u':fcntl.flock(int(args[1]),fcntl.LOCK_UN);sys.exit(0)
-wait=0
-if args[0]=='-n':args=args[1:]
-elif args[0]=='-w':wait=float(args[1]);args=args[2:]
-fd=int(args[0]);deadline=time.monotonic()+wait
-while True:
- try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);break
- except BlockingIOError:
-  if time.monotonic()>=deadline:sys.exit(1)
-  time.sleep(.02)
-""",
-    )
+    install_flock(tools)
     script(
         tools / "amixer",
         """#!/bin/sh
@@ -118,7 +102,7 @@ curl() {{
     def call(mode, text, **extra):
         payload = {"text": text, **extra}
         result = subprocess.run(
-            ["sh", str(ROOT / "speaker/lib/text.sh"), mode, json.dumps(payload)],
+            [*speaker_shell, str(ROOT / "speaker/lib/text.sh"), mode, json.dumps(payload)],
             env=env,
             capture_output=True,
             text=True,
@@ -231,11 +215,11 @@ exit 1
     assert not (path / "legacy-calls").exists()
 
 
-def test_temporary_tts_volume_restores_after_cancellation(text_device):
+def test_temporary_tts_volume_restores_after_cancellation(text_device, speaker_shell):
     call, path, env = text_device
     payload = {"text": "long speech", "volume": 25}
     proc = subprocess.Popen(
-        ["sh", str(ROOT / "speaker/lib/text.sh"), "announce", json.dumps(payload)],
+        [*speaker_shell, str(ROOT / "speaker/lib/text.sh"), "announce", json.dumps(payload)],
         env={**env, "TTS_SLEEP": "5"},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -250,7 +234,9 @@ def test_temporary_tts_volume_restores_after_cancellation(text_device):
     assert writes[0] == "notifyvol 25%" and writes[-1] == "notifyvol 60%"
 
 
-def test_voice_restore_keeps_new_master_and_does_not_link_other_channels(text_device):
+def test_voice_restore_keeps_new_master_and_does_not_link_other_channels(
+    text_device, speaker_shell
+):
     call, path, env = text_device
     (path / "xiaoai_bridge.desired.json").write_text(
         json.dumps(
@@ -268,13 +254,15 @@ BRIDGE_VOICE_REVISION=1
 printf '%s\\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
 bridge_restore_volume
 """
-    result = subprocess.run(["sh", "-c", body], env=env, capture_output=True, text=True, timeout=5)
+    result = subprocess.run(
+        [*speaker_shell, "-c", body], env=env, capture_output=True, text=True, timeout=5
+    )
     assert result.returncode == 0, result.stderr
     assert (path / "mixer-writes").read_text().splitlines() == ["mysoftvol 30%", "bluetooth 50%"]
     assert not (path / "xiaoai_bridge.voice").exists()
 
 
-def test_voice_inherits_audio_reservation_without_locking_itself_out(text_device):
+def test_voice_inherits_audio_reservation_without_locking_itself_out(text_device, speaker_shell):
     call, path, env = text_device
     body = f""". '{ROOT / "speaker/lib/listener-hooks.sh"}'
 bridge_voice_begin
@@ -283,18 +271,27 @@ STT_TEXT=hello
 bridge_process_text
 bridge_restore_volume
 """
-    result = subprocess.run(["sh", "-c", body], env=env, capture_output=True, text=True, timeout=8)
+    result = subprocess.run(
+        [*speaker_shell, "-c", body], env=env, capture_output=True, text=True, timeout=8
+    )
     assert result.returncode == 0, result.stderr
     assert (path / "tts-calls").read_text().strip() == "reply: hello"
     assert not (path / "xiaoai_bridge.voice").exists()
 
 
-def test_remote_conversation_releases_context_lock_before_waiting_for_voice_audio(text_device):
+def test_remote_conversation_releases_context_lock_before_waiting_for_voice_audio(
+    text_device, speaker_shell
+):
     call, path, env = text_device
     with (path / "xiaoai_bridge.audio.lock").open("w") as gate:
         fcntl.flock(gate, fcntl.LOCK_EX)
         proc = subprocess.Popen(
-            ["sh", str(ROOT / "speaker/lib/text.sh"), "send_text", json.dumps({"text": "hello"})],
+            [
+                *speaker_shell,
+                str(ROOT / "speaker/lib/text.sh"),
+                "send_text",
+                json.dumps({"text": "hello"}),
+            ],
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -321,3 +318,26 @@ def test_remote_conversation_releases_context_lock_before_waiting_for_voice_audi
             fcntl.flock(gate, fcntl.LOCK_UN)
             stdout, stderr = proc.communicate(timeout=8)
         assert proc.returncode == 0 and not stderr, stdout + stderr
+
+
+def test_error_prompt_waits_for_audio_with_busybox_fd_lock(text_device, speaker_shell):
+    call, path, env = text_device
+    with (path / "xiaoai_bridge.audio.lock").open("w") as owner:
+        fcntl.flock(owner, fcntl.LOCK_EX)
+        body = f""". '{ROOT / "speaker/lib/listener-hooks.sh"}'
+SPEAK='{path / "existing-tts"}'
+bridge_error_tts
+"""
+        proc = subprocess.Popen(
+            [*speaker_shell, "-c", body],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        time.sleep(0.15)
+        assert not (path / "tts-calls").exists() and proc.poll() is None
+        fcntl.flock(owner, fcntl.LOCK_UN)
+        _, stderr = proc.communicate(timeout=5)
+        assert proc.returncode == 0 and not stderr
+        assert (path / "tts-calls").read_text().strip() == "error"

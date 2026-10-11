@@ -24,6 +24,12 @@ jobs:
           python-version: "3.14"
           cache: pip
       - run: python -m pip install -r requirements-dev.txt
+      - name: Require actual BusyBox 1.36.1 ash and flock
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq busybox
+          /usr/bin/busybox 2>&1 | head -n 1 | grep 'BusyBox v1.36.1'
+          echo 'XIAOAI_TEST_BUSYBOX=/usr/bin/busybox' >> "$GITHUB_ENV"
       - name: Privacy and integration metadata
         run: |
           python tools/privacy_audit.py
@@ -37,7 +43,7 @@ jobs:
         run: |
           make -C speaker
           make -C speaker check
-      - name: Real HA fixtures, simulated hardware and installer regression tests
+      - name: Real BusyBox, HA fixtures and installer failure regression tests
         run: python -m pytest --junitxml=build/tests.xml
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()

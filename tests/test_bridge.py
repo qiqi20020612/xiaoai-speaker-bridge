@@ -1,6 +1,7 @@
 import http.client
 import json
 import os
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -18,8 +19,10 @@ def native_bridge(tmp_path, socket_enabled):
         prefix="xiaoai-test-", dir="/private/tmp" if os.path.isdir("/private/tmp") else "/tmp"
     )
     tmp_path = Path(runtime.name)
-    binary = ROOT / "build/native/xiaoai_bridge"
     subprocess.run(["make", "-s", "-C", str(ROOT / "speaker")], check=True)
+    binary = tmp_path / "bin/xiaoai_bridge"
+    binary.parent.mkdir()
+    shutil.copy2(ROOT / "build/native/xiaoai_bridge", binary)
     adapter = ROOT / "tests/mock_adapter.py"
     adapter.chmod(0o755)
     with socket.socket() as s:
@@ -227,3 +230,43 @@ def test_wake_event_yields_own_announcement_without_killing_conversation_or_serv
     assert result["status"] == "cancelled" and result["error"] == "voice_preempted"
     assert call("/api/state")[1]["voice"]["volumes"]["master"] == 60
     assert proc.poll() is None
+
+
+@pytest.mark.parametrize("broken", ["missing_config", "malformed_config", "missing_binary"])
+def test_recovery_stop_works_with_incomplete_files(
+    native_bridge, tmp_path, install_flock, speaker_shell, broken
+):
+    call, proc, runtime, port, config, token = native_bridge
+    package = tmp_path / "recovery-package"
+    (package / "lib").mkdir(parents=True)
+    shutil.copy2(ROOT / "speaker/lib/locks.sh", package / "lib/locks.sh")
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    install_flock(tools)
+    source = (
+        (ROOT / "speaker/start.sh")
+        .read_text()
+        .replace("PATH=/usr/sbin:/usr/bin:/sbin:/bin", f"PATH={tools}:{os.environ['PATH']}")
+    )
+    start = package / "start.sh"
+    start.write_text(source)
+    if broken == "missing_config":
+        config.unlink()
+    elif broken == "malformed_config":
+        config.write_text("broken")
+    else:
+        (runtime / "bin/xiaoai_bridge").unlink()
+    result = subprocess.run(
+        [*speaker_shell, str(start), "stop"],
+        env={
+            **os.environ,
+            "XIAOAI_BRIDGE_DIR": str(runtime),
+            "XIAOAI_BRIDGE_RUNTIME": str(runtime),
+            "XIAOAI_BRIDGE_CONFIG": str(config),
+        },
+        capture_output=True,
+        text=True,
+        timeout=8,
+    )
+    assert result.returncode == 0 and not result.stderr, result.stdout + result.stderr
+    assert proc.wait(timeout=3) == 0

@@ -51,6 +51,8 @@ AirPlay 音量既有只读传感器，也有独立 dB 值；没有通过发送�
 
 先阅读 [逐端安装、启用、升级及回滚](docs/install.md)。固定契约为：
 
+**0.1.1 修复 BusyBox 1.36.1 的 `flock` 兼容性，并增加安装失败自动恢复。** 0.1.0 若已更新 boot/Cron 后启动失败，请先按[部分安装恢复步骤](docs/install.md#8-从-010-的-busybox-启动失败状态恢复)使用新包回滚，再重新安装。
+
 ```text
 HA:    config/custom_components/xiaoai_speaker/
 LX06:  /data/xiaoai_bridge/start.sh

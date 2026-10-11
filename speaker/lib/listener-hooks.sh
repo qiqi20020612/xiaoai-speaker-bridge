@@ -6,7 +6,7 @@ printf '%s\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready"
 
 bridge_voice_begin() {
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
-    flock -w 3 7 || return 1
+    bridge_lock_for 3 7 || return 1
     printf '%s\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
     rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.led.json"
     BRIDGE_VOICE_REVISION=0
@@ -22,7 +22,7 @@ bridge_voice_begin() {
     # announcement when this event arrives; a Conversation releases session lock
     # before waiting for audio, so the voice pipeline cannot deadlock with it.
     exec 8> "$BRIDGE_RUNTIME/xiaoai_bridge.audio.lock"
-    flock -w 120 8 || return 1
+    bridge_lock_for 120 8 || return 1
     export XIAOAI_VOICE_AUDIO_LOCK=1
     trap 'bridge_voice_exit' HUP INT TERM
 }
@@ -39,7 +39,11 @@ bridge_error_tts() {
     if [ "${XIAOAI_VOICE_AUDIO_LOCK:-0}" = 1 ];then
         "$SPEAK" error
     else
-        flock -w 120 "$BRIDGE_RUNTIME/xiaoai_bridge.audio.lock" "$SPEAK" error
+        (
+            exec 8> "$BRIDGE_RUNTIME/xiaoai_bridge.audio.lock"
+            bridge_lock_for 120 8 || exit 1
+            "$SPEAK" error
+        )
     fi
 }
 
@@ -51,7 +55,7 @@ bridge_process_text() {
 
 bridge_restore_volume() {
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
-    flock -w 3 7 || return 1
+    bridge_lock_for 3 7 || return 1
     master=$SAVED_VOL
     bluetooth=${BRIDGE_BT_SAVED:-$SAVED_VOL}
     if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ]; then

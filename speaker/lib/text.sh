@@ -20,7 +20,7 @@ VOICE_GUARD_ACTIVE=false
 restore_tts_volume() {
     [ "$TTS_OVERRIDE_ACTIVE" = true ] || return 0
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
-    flock -w 3 7 || return 1
+    bridge_lock_for 3 7 || return 1
     value=$TTS_RESTORE_VALUE
     if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ]; then
         latest=$(jq -r --argjson before "$TTS_RESTORE_REVISION" 'if (.versions.tts // 0)>$before then .volumes.tts // empty else empty end' "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" 2>/dev/null || true)
@@ -46,7 +46,7 @@ trap 'exit 143' HUP INT TERM
 # Do not queue general work here. HA queues it; local locks only protect the device.
 if [ "$MODE" != voice ] && voice_busy; then fail busy; fi
 exec 9> "$BRIDGE_RUNTIME/xiaoai_bridge.session.lock"
-if [ "$MODE" = voice ]; then flock -w 120 9 || fail busy; else flock -n 9 || fail busy; fi
+if [ "$MODE" = voice ]; then bridge_lock_for 120 9 || fail busy; else flock -n 9 || fail busy; fi
 if [ "$MODE" != voice ] && voice_busy; then fail busy; fi
 
 LISTENER_CONFIG=$(config_value '.listener_config // "/data/listener"')
@@ -67,7 +67,7 @@ speak() {
         inherited_audio=true
     else
         exec 8> "$BRIDGE_RUNTIME/xiaoai_bridge.audio.lock"
-        flock -w 120 8 || fail busy
+        bridge_lock_for 120 8 || fail busy
     fi
     override=$(request_value '.volume // empty')
     saved_tts=$(percent notifyvol)
@@ -75,7 +75,7 @@ speak() {
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] && rev_before=$(jq -r '.revision // 0' "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
     if [ -n "$override" ]; then
         exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
-        flock -w 3 7 || fail busy
+        bridge_lock_for 3 7 || fail busy
         saved_tts=$(percent notifyvol)
         [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] && rev_before=$(jq -r '.revision // 0' "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
         [ -n "$saved_tts" ] || fail volume_unknown
