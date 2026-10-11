@@ -22,4 +22,32 @@
 
 本机日志只有 `/tmp/xiaoai_boot.log` 和 `/tmp/xiaoai_bridge.log`，有界轮转；worker stderr 不进入永久日志。HA 的集成诊断已去除身份和对话字段，发 Issue 前仍应检查内容。不要发原 `/data/listener`、完整 private 目录、token、配置包或会话缓存。
 
+## 首次启动与安装失败诊断
+
+0.1.2 原 5 秒 probe 预算及约 10 秒启动等待余量偏小，而且失败后的下一次 probe 约 15 秒后才开始。首次失败的真机根因尚未证实；0.1.3 修补这些容错缺口，并提供下一次验收所需的原因记录。
+
+0.1.3 首次探测最多快速尝试三次，每次 15 秒；失败后分别等待 1、2 秒。超时 worker 有最多 5 秒 TERM 退出宽限，启动检查总预算为 75 秒，不会因一次短暂探测失败立即回滚。健康检查只有取得有效的 capabilities/state 后才返回 ready。
+
+失败后先查看下列日志，日志只记录固定事件和数字错误码，仍请审阅后再分享：
+
+```sh
+tail -n 80 /tmp/xiaoai_bridge.log
+[ ! -f /tmp/xiaoai_bridge.log.1 ] || tail -n 80 /tmp/xiaoai_bridge.log.1
+cat /data/xiaoai_bridge.backup/status
+```
+
+| 日志事件 | 含义 |
+|---|---|
+| `init_*_failed` | C 初始化失败的阶段；`code` 为系统 errno，例如 PID 锁、HTTP bind 或本地事件 socket |
+| `probe_deadline_exceeded` / `probe_timeout` | 达到 15 秒截止时间 / worker 已退出并安排后续处理 |
+| `probe_exit_nonzero` / `probe_signalled` | worker 非零退出码 / 终止信号；不记录原脚本 stderr |
+| `probe_invalid_json` / `probe_invalid_response` / `probe_output_limit` | 无效 JSON / 缺少有效 capabilities/state 对象 / 输出过大 |
+| `probe_retry_scheduled` / `probe_ready` | 安排首次重试 / 成功取得探测快照；`elapsed` 是进程启动后的秒数 |
+| `start event=process_exited` | C 进程退出；`code` 为退出码 |
+| `start event=service_not_ready_deadline` | 进程仍在，但在启动预算内 HTTP 不可达、无响应或响应被拒绝 |
+| `start event=probe_pending_deadline` / `probe_failed` | 探测仍未完成 / 首次重试耗尽或失败持续到截止时间 |
+| `installation event=startup_failed` / `failed_restored` / `recovery_required` | 开始恢复 / 自动恢复成功 / 恢复未完成 |
+
+`failed_restored` 可在检查后直接重试新版完整包 `--apply`；`recovery_required` 先执行同一完整包 `--rollback`。当前版本已经成功安装时，直接升级即可；不要为升级先卸载、删除备份或重写语音配置。日志在运行期间轮转，保留当前文件和一份旧文件，合计约 128 KiB。
+
 禁用 HA 集成不会停音箱原服务。若需要移除设备 bridge，先用安装器撤销 adapter include/LED guard 并恢复原 listener，再移除 active 目录。不要用 `killall` 解决 bridge 问题，也不要卸载 Snapclient/upmpdcli。

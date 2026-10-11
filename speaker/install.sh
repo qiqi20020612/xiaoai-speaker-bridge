@@ -64,6 +64,14 @@ service() {
     XIAOAI_BRIDGE_CONFIG="$DEST/config.json" "$PACKAGE/start.sh" "$1" 8>&- 9>&-
 }
 restart_cron() { /etc/init.d/cron restart 8>&- 9>&-; }
+install_diagnostic() {
+    log="$RUNTIME/xiaoai_bridge.log"
+    [ ! -L "$log" ] || return 1
+    if [ -f "$log" ] && [ "$(wc -c < "$log")" -gt 65280 ];then
+        mv -f "$log" "$log.1" || return 1
+    fi
+    printf 'time=%s installation event=%s\n' "$(date +%s)" "$1" >> "$log"
+}
 
 remove_listener_include() {
     file=/data/listener
@@ -266,9 +274,11 @@ finish_apply() {
     if [ "$APPLY_ACTIVE" = true ];then
         if recover_snapshot;then
             set_phase failed_restored
+            install_diagnostic failed_restored || true
             printf '%s\n' 'Installation failed; previous boot/Cron/voice state restored. Inspect log, then retry --apply.' >&2
         else
             set_phase recovery_required
+            install_diagnostic recovery_required || true
             printf '%s\n' 'Automatic restoration incomplete; run this checked package --rollback before retrying.' >&2
         fi
     else
@@ -324,7 +334,12 @@ chmod 600 "$CRON.xiaoai.new"
 mv -f "$CRON.xiaoai.new" "$CRON"
 restart_cron
 # Keep an existing completed boot flag; no installation-time Squeezelite stop.
-service start || { printf '%s\n' 'Startup failed; restoring the installation transaction' >&2;exit 1; }
+if ! service start;then
+    install_diagnostic startup_failed || true
+    printf '%s\n' 'Startup failed; restoring the installation transaction' >&2
+    printf 'Startup diagnostics: %s/xiaoai_bridge.log (and .log.1 if rotated)\n' "$RUNTIME" >&2
+    exit 1
+fi
 # A running old listener has sourced old shell functions. Reload only an enabled
 # bridge adapter so the BusyBox lock fix also reaches that existing process.
 if jq -e '.enable_listener_adapter==true' "$DEST/config.json" >/dev/null 2>&1;then

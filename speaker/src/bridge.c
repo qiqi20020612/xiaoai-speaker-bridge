@@ -22,13 +22,17 @@
 #include <time.h>
 #include <unistd.h>
 
-#define VERSION "0.1.2"
+#define VERSION "0.1.3"
 #define CLIENTS 8
 #define BODY 12288
 #define OUTPUT 32768
 #define HISTORY 16
 #define WORKERS 3
 #define LOCAL_MESSAGE 4096
+#define PROBE_TIMEOUT 15
+#define STARTUP_PROBE_ATTEMPTS 3
+#define PROBE_INTERVAL 15
+#define LOG_LIMIT 65536
 
 struct config {
     char bind[64], token[129], id[65], name[129], adapter[512], runtime[256], path[512];
@@ -58,7 +62,7 @@ struct worker {
     size_t used;
     char output[OUTPUT];
     double deadline, kill_at;
-    int timed_out;
+    int timed_out, overflow;
 } workers[WORKERS];
 static char capabilities[8192] = "{}", cached_state[OUTPUT] = "{}";
 static uint64_t sequence = 1, connection_identity = 0;
@@ -75,6 +79,10 @@ static time_t airplay_mtime = 0;
 static time_t cached_at = 0;
 static long worker_peak_rss_kb = 0;
 static int probe_ok = 0;
+static unsigned probe_attempt = 0;
+static int probe_running = 0, startup_exhausted = 0, server_logging = 0;
+static const char *probe_status = "pending";
+static double server_started = 0;
 static volatile sig_atomic_t stopping = 0;
 
 static double monotime(void) {
@@ -86,14 +94,66 @@ static void stop_signal(int s) {
     (void)s;
     stopping = 1;
 }
-static void nonblock(int fd) {
+static int nonblock(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
-    if (flags >= 0)
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0)
+        return -1;
+    return fcntl(fd, F_SETFD, FD_CLOEXEC);
 }
 static void runtime_path(char *out, size_t n, const char *name) {
     snprintf(out, n, "%s/%s", cfg.runtime, name);
+}
+/* Events are fixed literals; never log configuration, adapter output or HTTP data.
+ * Open per event so both the daemon and start.sh follow rotation during runtime. */
+static void diagnostic(const char *event, int code) {
+    char line[256];
+    int n = snprintf(line, sizeof line,
+                     "time=%ld elapsed=%.3f bridge event=%s attempt=%u code=%d\n", (long)time(NULL),
+                     server_started ? monotime() - server_started : 0, event, probe_attempt, code);
+    int logged = 0;
+    if (server_logging) {
+        char path[512], previous[544];
+        runtime_path(path, sizeof path, "xiaoai_bridge.log");
+        snprintf(previous, sizeof previous, "%s.1", path);
+        int fd = open(path, O_CREAT | O_WRONLY | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0600);
+        struct stat st;
+        if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) {
+            if (st.st_size + n > LOG_LIMIT) {
+                close(fd);
+                fd = -1;
+                if (rename(path, previous) == 0)
+                    fd = open(path, O_CREAT | O_WRONLY | O_APPEND | O_NOFOLLOW | O_CLOEXEC, 0600);
+            }
+            if (fd >= 0)
+                logged = write(fd, line, (size_t)n) == n;
+        }
+        if (fd >= 0)
+            close(fd);
+    }
+    struct stat sink;
+    /* start.sh redirects stderr to the same log. Avoid duplicate writes (including
+     * to the old inode after rotation); keep diagnostics on a terminal/pipe. */
+    if (!logged || fstat(STDERR_FILENO, &sink) < 0 || !S_ISREG(sink.st_mode))
+        (void)write(STDERR_FILENO, line, (size_t)n);
+}
+static int initialization_failed(const char *event) {
+    diagnostic(event, errno);
+    return 2;
+}
+static void probe_failed(const char *reason, int code) {
+    probe_ok = 0;
+    probe_status = reason;
+    diagnostic(reason, code);
+    if (!cached_at && probe_attempt < STARTUP_PROBE_ATTEMPTS) {
+        next_probe = monotime() + probe_attempt; /* first retries after 1s and 2s */
+        diagnostic("probe_retry_scheduled", (int)probe_attempt);
+    } else {
+        next_probe = monotime() + PROBE_INTERVAL;
+        if (!cached_at && !startup_exhausted) {
+            startup_exhausted = 1;
+            diagnostic("startup_probe_retries_exhausted", STARTUP_PROBE_ATTEMPTS);
+        }
+    }
 }
 static int read_file(const char *path, char *out, size_t cap) {
     int fd = open(path, O_RDONLY | O_NOFOLLOW);
@@ -297,8 +357,10 @@ static int worker_spawn(int kind, int owner, int job, const char *operation, con
             slot = k;
             break;
         }
-    if (slot < 0)
+    if (slot < 0) {
+        errno = EBUSY;
         return -1;
+    }
     if (kind == 2)
         for (int k = 0; k < WORKERS; k++)
             if (workers[k].pid && workers[k].kind == 2)
@@ -311,16 +373,20 @@ static int worker_spawn(int kind, int owner, int job, const char *operation, con
     if (pipe(input) < 0)
         return -1;
     if (pipe(output) < 0) {
+        int saved = errno;
         close(input[0]);
         close(input[1]);
+        errno = saved;
         return -1;
     }
     pid_t pid = fork();
     if (pid < 0) {
+        int saved = errno;
         close(input[0]);
         close(input[1]);
         close(output[0]);
         close(output[1]);
+        errno = saved;
         return -1;
     }
     if (pid == 0) {
@@ -380,7 +446,7 @@ static int worker_spawn(int kind, int owner, int job, const char *operation, con
                                     .owner_identity = owner >= 0 ? conn[owner].identity : 0,
                                     .job = job,
                                     .deadline = monotime() + (kind == 2   ? cfg.timeout
-                                                              : kind == 0 ? 5
+                                                              : kind == 0 ? PROBE_TIMEOUT
                                                                           : 15)};
     if (at < length) {
         kill(-pid, SIGTERM);
@@ -430,7 +496,12 @@ static void dispatch(int i, char *method, char *path, char *body) {
     if (strcmp(method, "GET") == 0) {
         if (strcmp(path, "/api/health") == 0) {
             if (!cached_at) {
-                error(i, 503, "dependencies_not_ready");
+                snprintf(out, sizeof out,
+                         "{\"error\":\"dependencies_not_ready\",\"probe_status\":\"%s\","
+                         "\"probe_attempt\":%u,\"probe_running\":%s,\"startup_failed\":%s}",
+                         probe_status, probe_attempt, probe_running ? "true" : "false",
+                         startup_exhausted ? "true" : "false");
+                response(i, 503, out);
                 return;
             }
             snprintf(out, sizeof out, "{\"ready\":true,\"version\":\"%s\",\"protocol\":1}",
@@ -778,8 +849,10 @@ static void finish_worker(int k, int status) {
     struct worker *w = &workers[k];
     w->output[w->used] = 0;
     struct json_doc d;
-    int good = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    int good = WIFEXITED(status) && WEXITSTATUS(status) == 0 && !w->timed_out && !w->overflow;
     if (w->kind == 0) {
+        probe_running = 0;
+        int previously_ok = probe_ok;
         probe_ok = 0;
         if (good && json_parse(&d, w->output, w->used) == 0) {
             char cap[sizeof capabilities], state[sizeof cached_state];
@@ -792,9 +865,27 @@ static void finish_worker(int k, int status) {
                 strcpy(cached_state, state);
                 cached_at = time(NULL);
                 probe_ok = 1;
+                probe_status = "ready";
+                startup_exhausted = 0;
+                if (!previously_ok)
+                    diagnostic("probe_ready", 0);
                 if (changed)
                     ++sequence;
             }
+        }
+        if (!probe_ok) {
+            if (w->timed_out)
+                probe_failed("probe_timeout", PROBE_TIMEOUT);
+            else if (w->overflow)
+                probe_failed("probe_output_limit", OUTPUT);
+            else if (!WIFEXITED(status))
+                probe_failed("probe_signalled", WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+            else if (WEXITSTATUS(status) != 0)
+                probe_failed("probe_exit_nonzero", WEXITSTATUS(status));
+            else if (json_parse(&d, w->output, w->used) < 0)
+                probe_failed("probe_invalid_json", 0);
+            else
+                probe_failed("probe_invalid_response", 0);
         }
     } else {
         struct job *j = &jobs[w->job];
@@ -863,6 +954,7 @@ static void read_worker(int k) {
             }
         }
         if (w->used >= sizeof w->output - 1) {
+            w->overflow = 1;
             kill(-w->pid, SIGTERM);
             w->kill_at = monotime() + 2;
         }
@@ -939,6 +1031,9 @@ static void accept_client(void) {
     close(fd);
 }
 static int server(void) {
+    server_started = monotime();
+    server_logging = 1;
+    diagnostic("initializing", 0);
     snprintf(instance_id, sizeof instance_id, "%ld-%ld-%ld", (long)time(NULL), (long)getpid(),
              (long)(monotime() * 1000000));
     rate_at = monotime();
@@ -949,46 +1044,56 @@ static int server(void) {
     char pidfile[512];
     runtime_path(pidfile, sizeof pidfile, "xiaoai_bridge.pid");
     int lock = open(pidfile, O_CREAT | O_RDWR | O_NOFOLLOW, 0600);
-    if (lock < 0 || flock(lock, LOCK_EX | LOCK_NB) < 0) {
-        if (lock >= 0)
-            close(lock);
-        return 2;
-    }
-    fcntl(lock, F_SETFD, FD_CLOEXEC);
+    if (lock < 0)
+        return initialization_failed("init_pid_open_failed");
+    if (flock(lock, LOCK_EX | LOCK_NB) < 0)
+        return initialization_failed("init_pid_lock_failed");
+    if (fcntl(lock, F_SETFD, FD_CLOEXEC) < 0)
+        return initialization_failed("init_pid_cloexec_failed");
     char pid[32];
     int pn = snprintf(pid, sizeof pid, "%ld\n", (long)getpid());
     if (ftruncate(lock, 0) < 0 || write(lock, pid, (size_t)pn) != pn) {
-        close(lock);
-        return 2;
+        return initialization_failed("init_pid_write_failed");
     }
     listening = socket(AF_INET, SOCK_STREAM, 0);
     if (listening < 0)
-        return 2;
+        return initialization_failed("init_http_socket_failed");
     int yes = 1;
-    setsockopt(listening, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
+    if (setsockopt(listening, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) < 0)
+        return initialization_failed("init_http_options_failed");
     struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons((uint16_t)cfg.port)};
-    if (inet_pton(AF_INET, cfg.bind, &addr.sin_addr) != 1 ||
-        bind(listening, (struct sockaddr *)&addr, sizeof addr) < 0 ||
-        listen(listening, CLIENTS) < 0) {
-        close(listening);
-        return 2;
+    if (inet_pton(AF_INET, cfg.bind, &addr.sin_addr) != 1) {
+        errno = EINVAL;
+        return initialization_failed("init_http_address_failed");
     }
-    nonblock(listening);
+    if (bind(listening, (struct sockaddr *)&addr, sizeof addr) < 0)
+        return initialization_failed("init_http_bind_failed");
+    if (listen(listening, CLIENTS) < 0)
+        return initialization_failed("init_http_listen_failed");
+    if (nonblock(listening) < 0)
+        return initialization_failed("init_http_nonblock_failed");
     local_socket = socket(AF_UNIX, SOCK_DGRAM, 0);
+    if (local_socket < 0)
+        return initialization_failed("init_events_socket_failed");
     char socket_path[512];
     runtime_path(socket_path, sizeof socket_path, "xiaoai_bridge.events.sock");
     struct sockaddr_un un = {.sun_family = AF_UNIX};
-    if (strlen(socket_path) >= sizeof un.sun_path)
-        return 2;
+    if (strlen(socket_path) >= sizeof un.sun_path) {
+        errno = ENAMETOOLONG;
+        return initialization_failed("init_events_path_failed");
+    }
     strcpy(un.sun_path, socket_path);
     unlink(socket_path);
     if (bind(local_socket, (struct sockaddr *)&un, sizeof un) < 0)
-        return 2;
-    chmod(socket_path, 0600);
-    nonblock(local_socket);
+        return initialization_failed("init_events_bind_failed");
+    if (chmod(socket_path, 0600) < 0)
+        return initialization_failed("init_events_permissions_failed");
+    if (nonblock(local_socket) < 0)
+        return initialization_failed("init_events_nonblock_failed");
     signal(SIGTERM, stop_signal);
     signal(SIGINT, stop_signal);
     signal(SIGPIPE, SIG_IGN);
+    diagnostic("http_listening", 0);
     while (!stopping) {
         struct pollfd fds[2 + CLIENTS + WORKERS];
         int map[2 + CLIENTS + WORKERS], count = 0;
@@ -1009,7 +1114,10 @@ static int server(void) {
                 fds[count] = (struct pollfd){workers[k].fd, POLLIN, 0};
                 map[count++] = CLIENTS + k;
             }
-        poll(fds, (nfds_t)count, 500);
+        if (poll(fds, (nfds_t)count, 500) < 0 && errno != EINTR) {
+            diagnostic("poll_failed", errno);
+            stopping = 1;
+        }
         for (int k = 0; k < count; k++)
             if (fds[k].revents) {
                 int index = map[k];
@@ -1053,6 +1161,10 @@ static int server(void) {
             if (workers[k].pid) {
                 if (now > workers[k].deadline && !workers[k].kill_at) {
                     workers[k].timed_out = 1;
+                    if (workers[k].kind == 0) {
+                        probe_status = "probe_timeout";
+                        diagnostic("probe_deadline_exceeded", PROBE_TIMEOUT);
+                    }
                     kill(-workers[k].pid, SIGTERM);
                     workers[k].kill_at = now + 5;
                 }
@@ -1098,8 +1210,19 @@ static int server(void) {
             for (int k = 0; k < WORKERS; k++)
                 if (workers[k].pid && workers[k].kind == 0)
                     running = 1;
-            if (!running && worker_spawn(0, -1, -1, "probe", "{}") >= 0)
-                next_probe = now + 15;
+            if (!running) {
+                ++probe_attempt;
+                if (worker_spawn(0, -1, -1, "probe", "{}") < 0)
+                    probe_failed("probe_spawn_failed", errno);
+                else {
+                    probe_running = 1;
+                    if (strcmp(probe_status, "pending") == 0)
+                        probe_status = "running";
+                    if (!cached_at)
+                        diagnostic("probe_started", PROBE_TIMEOUT);
+                    next_probe = now + PROBE_INTERVAL;
+                }
+            }
         }
         if (now - last_airplay_check >= 1) {
             last_airplay_check = now;
@@ -1137,6 +1260,7 @@ static int server(void) {
         }
     unlink(pidfile);
     close(lock);
+    diagnostic("stopped", 0);
     return 0;
 }
 static int emit(const char *message) {
@@ -1158,35 +1282,87 @@ static int emit(const char *message) {
     close(fd);
     return n == (ssize_t)strlen(message) ? 0 : 1;
 }
+/* --health exit codes: 0 ready, 1 HTTP unavailable/rejected, 3 probe pending,
+ * 4 probe failed but retrying, 5 initial retries exhausted. No response is echoed. */
+static int health_wait(int fd, short events, double deadline) {
+    while (monotime() < deadline) {
+        struct pollfd p = {fd, events, 0};
+        int remaining = (int)((deadline - monotime()) * 1000) + 1;
+        int result = poll(&p, 1, remaining > 0 ? remaining : 1);
+        if (result > 0)
+            return !(p.revents & (POLLERR | POLLNVAL));
+        if (result < 0 && errno != EINTR)
+            break;
+    }
+    return 0;
+}
 static int health(void) {
+    signal(SIGPIPE, SIG_IGN);
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
         return 1;
+    double deadline = monotime() + 2;
     struct sockaddr_in addr = {.sin_family = AF_INET, .sin_port = htons((uint16_t)cfg.port)};
     inet_pton(AF_INET, strcmp(cfg.bind, "0.0.0.0") == 0 ? "127.0.0.1" : cfg.bind, &addr.sin_addr);
-    struct timeval t = {2, 0};
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &t, sizeof t);
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &t, sizeof t);
+    if (nonblock(fd) < 0)
+        goto unavailable;
     if (connect(fd, (struct sockaddr *)&addr, sizeof addr) < 0) {
-        close(fd);
-        return 1;
+        if (errno != EINPROGRESS || !health_wait(fd, POLLOUT, deadline))
+            goto unavailable;
+        int error = 0;
+        socklen_t length = sizeof error;
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) < 0 || error)
+            goto unavailable;
     }
     char req[512];
     int n = snprintf(req, sizeof req,
                      "GET /api/health HTTP/1.1\r\nHost: "
                      "localhost\r\nAuthorization: Bearer %s\r\n\r\n",
                      cfg.token);
-    if (write(fd, req, (size_t)n) != n) {
-        close(fd);
-        return 1;
+    size_t sent = 0;
+    while (sent < (size_t)n && health_wait(fd, POLLOUT, deadline)) {
+        ssize_t written = send(fd, req + sent, (size_t)n - sent, 0);
+        if (written > 0)
+            sent += (size_t)written;
+        else if (written == 0 || (errno != EAGAIN && errno != EINTR))
+            goto unavailable;
     }
-    char response_body[1024];
-    ssize_t received = read(fd, response_body, sizeof response_body - 1);
+    if (sent != (size_t)n)
+        goto unavailable;
+    char reply[1024];
+    size_t used = 0;
+    int ended = 0;
+    while (used < sizeof reply - 1 && health_wait(fd, POLLIN, deadline)) {
+        ssize_t received = read(fd, reply + used, sizeof reply - used - 1);
+        if (received > 0)
+            used += (size_t)received;
+        else if (received == 0) {
+            ended = 1;
+            break;
+        } else if (errno != EAGAIN && errno != EINTR)
+            goto unavailable;
+    }
     close(fd);
-    if (received < 1)
+    if (!ended)
         return 1;
-    response_body[received] = 0;
-    return strncmp(response_body, "HTTP/1.1 200 ", 13) ? 1 : 0;
+    reply[used] = 0;
+    const char *body = strstr(reply, "\r\n\r\n");
+    struct json_doc d;
+    if (!body || json_parse(&d, body + 4, strlen(body + 4)) < 0 || d.t[0].type != J_OBJECT)
+        return 1;
+    if (strncmp(reply, "HTTP/1.1 200 ", 13) == 0)
+        return json_bool(&d, json_get(&d, 0, "ready"), 0) ? 0 : 1;
+    if (strncmp(reply, "HTTP/1.1 503 ", 13) != 0)
+        return 1;
+    if (json_bool(&d, json_get(&d, 0, "startup_failed"), 0))
+        return 5;
+    char status[48];
+    if (text(&d, 0, "probe_status", status, sizeof status) < 0)
+        return 3; /* Compatibility with an older running endpoint. */
+    return strcmp(status, "pending") == 0 || strcmp(status, "running") == 0 ? 3 : 4;
+unavailable:
+    close(fd);
+    return 1;
 }
 static int mpd_state(void) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);

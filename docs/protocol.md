@@ -1,6 +1,6 @@
 # 协议与安全行为
 
-桥接协议 `1`、软件版本 `0.1.2`。IPv4 HTTP 默认 `8766`，随机 Bearer token 必填；配置 `0600`、持久 UUID 稳定。白名单最多 8 个 IPv4/CIDR，空数组表示允许所有可达地址；建议限制为 HA 地址。回环用于本机健康检查。HTTP 仅用于可信 LAN，部署者负责禁止公网端口映射。
+桥接协议 `1`、软件版本 `0.1.3`。IPv4 HTTP 默认 `8766`，随机 Bearer token 必填；配置 `0600`、持久 UUID 稳定。白名单最多 8 个 IPv4/CIDR，空数组表示允许所有可达地址；建议限制为 HA 地址。回环用于本机健康检查。HTTP 仅用于可信 LAN，部署者负责禁止公网端口映射。
 
 ## 设备接口
 
@@ -9,7 +9,7 @@
 | `GET /api/info` | 协议、设备 UUID、通用型号、软件版本、实际 capabilities；不返回密钥 |
 | `GET /api/state` | 更新时间、stale 标志、独立音量、真实 AirPlay/蓝牙状态、voice 来源快照、资源、instance ID |
 | `GET /api/playback` | 同一只读快照；MPD 全部业务状态由 HA 直连协议补齐 |
-| `GET /api/health` | 首次成功 probe 后才 ready，依赖状态在 `/api/state`；不回显配置 |
+| `GET /api/health` | 首次成功 probe 后才 ready；未就绪时 HTTP 503 携带 `probe_status`、`probe_attempt`、`probe_running`、`startup_failed`，不回显配置 |
 | `GET /api/events?since=N` | 25 秒长轮询，返回单调 sequence；重启/较大旧游标产生 reset |
 | `POST /api/policy` | HA 当前来源/不确定状态的小快照，不在音箱运行 HA 规则引擎 |
 | `POST /api/volume` | `request_id,target,level`；只接受明确硬件目标，`auto/all` 由 HA 先解析 |
@@ -33,6 +33,9 @@
 - 认证请求限流为 burst 40、补充 10 次/秒。连接读取有超时，长轮询每 25 秒返回，子任务最长 180 秒。
 - 启动脚本与二进制均有 flock 多实例保护。worker 用固定 argv 执行受信本机脚本，请求经 stdin JSON/安全参数传递，不拼接命令。
 - 任务超时/取消只终止自己派生的进程组，先 TERM，最多 5 秒后清理，不碰原共享服务。
+- probe 最长 15 秒；首次失败后在 1、2 秒后重试，启动最多三次快速尝试，之后恢复低频 15 秒间隔。启动脚本的单调等待预算为 75 秒，每次 CLI 健康请求共用一个 2 秒网络截止时间，HTTP 503 不会被当成健康成功。
+
+本机 `--health` 的退出码为：`0` 已就绪，`1` HTTP 不可达/无响应/拒绝/响应无效，`3` 首次 probe 等待中，`4` probe 已失败但仍在重试，`5` 首次三次尝试已耗尽。旧版本未提供探测诊断的 503 按等待中处理，兼容已有实例检查。CLI 不输出响应正文或认证头。
 
 ## HA 内部编排
 
@@ -58,4 +61,4 @@ AirPlay 原始 dB ≤ -144 映射静音 0%；其余钳制到 [-30,0] 并线性�
 
 ALSA 按实际控件、DBus 按实际属性、蓝牙按实际对象和播放器检测。不存在/失败的状态为 null/unknown，不回填假 false；反向操作需要 `verified` 和运行时可用性。缺失依赖时 stale 标志使实体不可用。LED 仅报告命令回执，voice 接管后清除旧状态。
 
-诊断导出使用字段白名单，只含通用能力、版本、资源、任务状态和队列数量；不含 IP、连接名称、设备 UUID、HA/bridge token、原配置、对话文本、回复或会话 ID。运行日志只在 `/tmp`；固定启动日志有界轮转，worker stderr 不写入持久日志。
+诊断导出使用字段白名单，只含通用能力、版本、资源、任务状态和队列数量；不含 IP、连接名称、设备 UUID、HA/bridge token、原配置、对话文本、回复或会话 ID。桥接运行日志只在 `/tmp`，C 与启动/安装脚本仅记录固定事件、时间、尝试次数及数字错误码，运行过程中也检查轮转；当前日志和一份 `.log.1` 各最多约 64 KiB。worker 的原始 stdout/stderr 均不复制到日志。

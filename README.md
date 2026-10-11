@@ -55,6 +55,8 @@ AirPlay 音量既有只读传感器，也有独立 dB 值；没有通过发送�
 
 **0.1.2 显式接入原 EOAIC2 Agent、共享缓存及原令牌续期函数。** 真实 HTTP 回归核对 Agent/Conversation ID、401 续期和成功后的滑动期限，见 [Conversation 执行链路](docs/conversation.md)。用完整新包升级即可，现有 listener/Agent/KWS/STT/TTS 配置不替换。
 
+**0.1.3 增加首次启动容错和诊断。** probe 超时提高到 15 秒，首次失败后分别等待 1、2 秒重试，启动健康等待预算为 75 秒。首次成功探测前保持未就绪；连续三次失败仍自动恢复安装事务。初始化、探测原因和安装恢复状态写入有界日志，见[启动诊断](docs/troubleshooting.md#首次启动与安装失败诊断)。
+
 ```text
 HA:    config/custom_components/xiaoai_speaker/
 LX06:  /data/xiaoai_bridge/start.sh

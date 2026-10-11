@@ -1,6 +1,7 @@
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -79,7 +80,15 @@ def native_bridge(tmp_path, socket_enabled):
     stderr = proc.stderr.read().decode()
     proc.stderr.close()
     runtime.cleanup()
-    assert not stderr
+    assert all(
+        re.fullmatch(
+            r"time=\d+ elapsed=[\d.]+ bridge event="
+            r"(initializing|http_listening|probe_started|probe_ready|stopped) attempt=\d+ code=\d+",
+            line,
+        )
+        for line in stderr.splitlines()
+    ), stderr
+    assert token not in stderr
 
 
 def test_authentication_and_no_arbitrary_shell(native_bridge):
