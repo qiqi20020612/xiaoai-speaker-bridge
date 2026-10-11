@@ -133,8 +133,16 @@ static void diagnostic(const char *event, int code) {
     struct stat sink;
     /* start.sh redirects stderr to the same log. Avoid duplicate writes (including
      * to the old inode after rotation); keep diagnostics on a terminal/pipe. */
-    if (!logged || fstat(STDERR_FILENO, &sink) < 0 || !S_ISREG(sink.st_mode))
-        (void)write(STDERR_FILENO, line, (size_t)n);
+    if (!logged || fstat(STDERR_FILENO, &sink) < 0 || !S_ISREG(sink.st_mode)) {
+        size_t at = 0;
+        while (at < (size_t)n) {
+            ssize_t written = write(STDERR_FILENO, line + at, (size_t)n - at);
+            if (written > 0)
+                at += (size_t)written;
+            else if (written == 0 || errno != EINTR)
+                break;
+        }
+    }
 }
 static int initialization_failed(const char *event) {
     diagnostic(event, errno);
