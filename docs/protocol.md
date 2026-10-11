@@ -1,6 +1,6 @@
 # 协议与安全行为
 
-桥接协议 `1`、软件版本 `0.1.1`。IPv4 HTTP 默认 `8766`，随机 Bearer token 必填；配置 `0600`、持久 UUID 稳定。白名单最多 8 个 IPv4/CIDR，空数组表示允许所有可达地址；建议限制为 HA 地址。回环用于本机健康检查。HTTP 仅用于可信 LAN，部署者负责禁止公网端口映射。
+桥接协议 `1`、软件版本 `0.1.2`。IPv4 HTTP 默认 `8766`，随机 Bearer token 必填；配置 `0600`、持久 UUID 稳定。白名单最多 8 个 IPv4/CIDR，空数组表示允许所有可达地址；建议限制为 HA 地址。回环用于本机健康检查。HTTP 仅用于可信 LAN，部署者负责禁止公网端口映射。
 
 ## 设备接口
 
@@ -51,6 +51,8 @@ HA `Store` 持久保存成功确认的期望值。bridge 重启后，HA 按新 i
 AirPlay 原始 dB ≤ -144 映射静音 0%；其余钳制到 [-30,0] 并线性映射至 [0,100]。这是控制百分比，不是响度百分比；反向 0% 为 -144，其余 `0.3*percent-30`。原 Shairport 衰减曲线不变；发送端同步未实测前反向接口关闭。`all` 在 AirPlay 活跃时不写 master，能力不足时预检失败。
 
 语音与远程文字共享本机 session flock、原 Agent 函数和原 `{agent,id,ts}` 缓存。成功按原五分钟滑动规则更新；失败回复回滚误更新，`use_context=false` 使用临时独立缓存，Agent 覆盖使用独立缓存（最多 8 个覆盖上下文）。原 OAuth token 从现有 listener 加载，桥接配置不存 HA 长期 token。`announce` 不进入上述 Conversation 阶段。
+
+原 Agent 显式加载并验证函数入口，原函数注入有效的 Conversation ID。仅明确 HTTP 401 复用原 launcher 续期并重试一次；其他错误不重试。具体调用、令牌来源及真实 HTTP 请求测试见 [Conversation 链路](conversation.md)。
 
 ## 能力与诊断
 

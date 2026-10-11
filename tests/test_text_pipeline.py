@@ -1,12 +1,15 @@
 import fcntl
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 import pytest
+
+from tests.http_conversation import ConversationHTTP
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,10 +20,22 @@ def script(path, text):
 
 
 @pytest.fixture
-def text_device(tmp_path, install_flock, speaker_shell):
+def ha_http(socket_enabled):
+    server = ConversationHTTP()
+    try:
+        yield server
+    finally:
+        server.close()
+
+
+@pytest.fixture
+def text_device(tmp_path, install_flock, speaker_shell, ha_http, busybox_binary):
     tools = tmp_path / "tools"
     tools.mkdir()
     install_flock(tools)
+    if busybox_binary:
+        for applet in ("awk", "sed"):
+            script(tools / applet, f'#!/bin/sh\nexec "{busybox_binary}" {applet} "$@"\n')
     script(
         tools / "amixer",
         """#!/bin/sh
@@ -31,18 +46,26 @@ else
 fi
 """,
     )
-    script(
-        tools / "curl",
-        """#!/bin/sh
-for arg in "$@";do
- case "$arg" in
-  */volume_plan) printf '{"handled":false}';exit 0 ;;
-  */intent) exit 22 ;;
- esac
-done
-exit 1
-""",
+    assert shutil.which("curl"), "The HTTP integration tests require real curl"
+    # Keep every production script intact except the fixture's local-intent URL:
+    # an ephemeral HTTP port replaces the device's fixed port 80. No curl mock.
+    bridge = tmp_path / "bridge"
+    shutil.copytree(ROOT / "speaker/lib", bridge / "lib")
+    pipeline = bridge / "lib/text.sh"
+    pipeline.write_text(
+        pipeline.read_text().replace("http://127.0.0.1/intent", ha_http.url + "/intent")
     )
+    agent = tmp_path / "existing-eoai-agent.sh"
+    shutil.copy(ROOT / "tests/synthetic_eoai_agent.sh", agent)
+    auth = tmp_path / "existing-launcher.sh"
+    shutil.copy(ROOT / "tests/synthetic_auth_launcher.sh", auth)
+    ha_http.state_dir = tmp_path
+    script(tools / "ip", "#!/bin/sh\nprintf 'inet 192.0.2.42/24\\n'\n")
+    if sys.platform == "darwin":
+        script(
+            tools / "sed",
+            '#!/bin/sh\nif [ "$1" = -i ];then shift;exec /usr/bin/sed -i \'\' "$@";fi\nexec /usr/bin/sed "$@"\n',
+        )
     script(
         tools / "dbus-send",
         """#!/bin/sh
@@ -68,32 +91,29 @@ sleep "${TTS_SLEEP:-0.02}"
 """,
     )
     listener = tmp_path / "existing-listener"
-    listener.write_text(f"""HA_URL=http://homeassistant.example
+    listener.write_text(f"""HA_URL={ha_http.url}
 HA_TOKEN=synthetic-token
-EOAIC2_AGENT_ID=conversation.synthetic
-EOAIC2_KEEP_SECONDS=300
-EOAIC2_STATE="$STATE_DIR/eoai_conversation.json"
+HA_REFRESH_TOKEN=synthetic-refresh-token
 STT_LANGUAGE=zh-CN
-curl() {{
-    previous='';body=''
-    for part in "$@";do
-        if [ "$previous" = -d ];then body=$part;break;fi
-        previous=$part
-    done
-    '{sys.executable}' '{ROOT / "tests/legacy_agent_stub.py"}' "$EOAIC2_STATE" "$EOAIC2_AGENT_ID" "$body"
-}}
+. '{agent}'
 """)
     config = tmp_path / "config.json"
     config.write_text(
         json.dumps(
-            {"device_id": "synthetic", "listener_config": str(listener), "tts_path": str(tts)}
+            {
+                "device_id": "synthetic",
+                "listener_config": str(listener),
+                "tts_path": str(tts),
+                "eoai_agent_script": str(agent),
+                "ha_auth_source": str(auth),
+            }
         )
     )
     env = {
         **os.environ,
         "PATH": str(tools) + os.pathsep + os.environ["PATH"],
         "STATE_DIR": str(tmp_path),
-        "XIAOAI_BRIDGE_DIR": str(ROOT / "speaker"),
+        "XIAOAI_BRIDGE_DIR": str(bridge),
         "XIAOAI_BRIDGE_BIN": str(tools / "fake-bridge"),
         "XIAOAI_BRIDGE_RUNTIME": str(tmp_path),
         "XIAOAI_BRIDGE_CONFIG": str(config),
@@ -102,7 +122,7 @@ curl() {{
     def call(mode, text, **extra):
         payload = {"text": text, **extra}
         result = subprocess.run(
-            [*speaker_shell, str(ROOT / "speaker/lib/text.sh"), mode, json.dumps(payload)],
+            [*speaker_shell, str(pipeline), mode, json.dumps(payload)],
             env=env,
             capture_output=True,
             text=True,
@@ -122,19 +142,33 @@ def test_announce_reads_open_lamp_without_executing_or_updating_context(text_dev
     assert not (path / "legacy-calls").exists() and not (path / "eoai_conversation.json").exists()
 
 
-def test_voice_text_voice_share_original_sliding_context(text_device):
+def test_voice_text_voice_share_original_sliding_context(text_device, ha_http):
     call, path, env = text_device
     assert call("voice", "my name is Alice")[0].returncode == 0
     cid = json.loads((path / "eoai_conversation.json").read_text())["id"]
+    state = json.loads((path / "eoai_conversation.json").read_text())
+    state["ts"] -= 60
+    (path / "eoai_conversation.json").write_text(json.dumps(state))
+    before = int(time.time())
     _, reply = call("send_text", "what is my name", speak_response=False)
     assert reply["reply_text"] == "Alice" and reply["source"] == "mpd"
     assert json.loads((path / "eoai_conversation.json").read_text())["id"] == cid
+    assert json.loads((path / "eoai_conversation.json").read_text())["ts"] >= before
     _, reply = call("voice", "what is my name")
     assert reply["reply_text"] == "Alice"
     assert (path / "tts-calls").read_text().splitlines() == ["reply: my name is Alice", "Alice"]
+    wire = ha_http.conversations
+    assert len(wire) == 3
+    assert [r["body"].get("conversation_id") for r in wire] == [None, cid, cid]
+    for request in wire:
+        assert request["method"] == "POST"
+        assert request["body"]["agent_id"] == "conversation.synthetic"
+        assert request["body"]["language"] == "zh-CN"
+        assert request["headers"]["Content-Type"] == "application/json"
+        assert request["headers"]["Authorization"] == "Bearer synthetic-token"
 
 
-def test_no_context_and_agent_override_do_not_mix_the_default_context(text_device):
+def test_no_context_and_agent_override_do_not_mix_the_default_context(text_device, ha_http):
     call, path, env = text_device
     call("voice", "my name is Alice")
     saved = (path / "eoai_conversation.json").read_text()
@@ -145,6 +179,8 @@ def test_no_context_and_agent_override_do_not_mix_the_default_context(text_devic
         == "unknown"
     )
     assert (path / "eoai_conversation.json").read_text() == saved
+    assert ha_http.conversations[-1]["body"]["agent_id"] == "conversation.synthetic"
+    assert "conversation_id" not in ha_http.conversations[-1]["body"]
     assert (
         call("send_text", "what is my name", speak_response=False, agent_id="conversation.other")[
             1
@@ -152,6 +188,8 @@ def test_no_context_and_agent_override_do_not_mix_the_default_context(text_devic
         == "unknown"
     )
     assert (path / "eoai_conversation.json").read_text() == saved
+    assert ha_http.conversations[-1]["body"]["agent_id"] == "conversation.other"
+    assert "conversation_id" not in ha_http.conversations[-1]["body"]
 
 
 def test_failed_conversation_does_not_refresh_context(text_device):
@@ -175,6 +213,222 @@ def test_original_five_minute_expiry_creates_a_fresh_conversation(text_device):
     assert json.loads((path / "eoai_conversation.json").read_text())["id"] != state["id"]
 
 
+@pytest.mark.parametrize("age", [300, 301, -30])
+def test_real_http_excludes_expired_or_future_conversation_id(text_device, ha_http, age):
+    call, path, _ = text_device
+    cached = {
+        "agent": "conversation.synthetic",
+        "id": "expired-synthetic-id",
+        "ts": int(time.time()) - age,
+    }
+    (path / "eoai_conversation.json").write_text(json.dumps(cached))
+    result, _ = call("send_text", "hello", speak_response=False)
+    assert result.returncode == 0
+    assert "conversation_id" not in ha_http.conversations[-1]["body"]
+    assert json.loads((path / "eoai_conversation.json").read_text())["id"] != cached["id"]
+
+
+def test_real_http_override_cache_is_shared_without_changing_default_or_selection(
+    text_device, ha_http
+):
+    call, path, _ = text_device
+    call("voice", "my name is Alice", speak_response=False)
+    default = (path / "eoai_conversation.json").read_text()
+    (path / "xiaoai_bridge.agent.json").write_text('{"agent_id":"conversation.other"}')
+    call("voice", "my name is Bob", speak_response=False)
+    override = path / "xiaoai_bridge.context.conversation.other.json"
+    cid = json.loads(override.read_text())["id"]
+    result, reply = call("send_text", "what is my name", speak_response=False)
+    assert result.returncode == 0 and reply["reply_text"] == "Bob"
+    assert ha_http.conversations[-1]["body"]["agent_id"] == "conversation.other"
+    assert ha_http.conversations[-1]["body"]["conversation_id"] == cid
+    saved = override.read_text()
+    result, reply = call(
+        "send_text",
+        "what is my name",
+        speak_response=False,
+        agent_id="conversation.third",
+        use_context=False,
+    )
+    assert result.returncode == 0 and reply["reply_text"] == "unknown"
+    assert ha_http.conversations[-1]["body"]["agent_id"] == "conversation.third"
+    assert "conversation_id" not in ha_http.conversations[-1]["body"]
+    assert (
+        override.read_text() == saved and (path / "eoai_conversation.json").read_text() == default
+    )
+    assert not (path / "xiaoai_bridge.context.conversation.third.json").exists()
+    assert (
+        json.loads((path / "xiaoai_bridge.agent.json").read_text())["agent_id"]
+        == "conversation.other"
+    )
+    assert not list(path.glob("xiaoai_text.*"))
+
+
+def test_missing_original_wrapper_fails_without_a_raw_http_fallback(text_device, ha_http):
+    call, path, _ = text_device
+    agent = path / "existing-eoai-agent.sh"
+    agent.write_text("EOAIC2_AGENT_ID=conversation.synthetic\nEOAIC2_STATE=unused\n")
+    result, reply = call("send_text", "hello", speak_response=False)
+    assert result.returncode != 0 and reply["error"] == "conversation_adapter_missing"
+    assert not ha_http.conversations
+
+
+def test_original_agent_is_explicitly_loaded_after_a_listener_curl_function(text_device, ha_http):
+    call, path, _ = text_device
+    with (path / "existing-listener").open("a") as listener:
+        listener.write("curl() { printf 'This unrelated wrapper must not execute';return 99; }\n")
+    result, _ = call("send_text", "hello", speak_response=False)
+    assert result.returncode == 0
+    assert ha_http.conversations[-1]["body"]["agent_id"] == "conversation.synthetic"
+
+
+def test_reloading_original_wrapper_preserves_listener_agent_cache_and_ttl(text_device, ha_http):
+    call, path, _ = text_device
+    agent = path / "existing-eoai-agent.sh"
+    agent.write_text(agent.read_text().replace("EOAIC2_KEEP_SECONDS=300", "EOAIC2_KEEP_SECONDS=1"))
+    cache = path / "existing-custom-cache.json"
+    cache.write_text(
+        json.dumps(
+            {
+                "agent": "conversation.configured",
+                "id": "configured-existing-id",
+                "ts": int(time.time()) - 60,
+            }
+        )
+    )
+    with (path / "existing-listener").open("a") as listener:
+        listener.write(
+            f'EOAIC2_AGENT_ID=conversation.configured\nEOAIC2_STATE="{cache}"\nEOAIC2_KEEP_SECONDS=300\n'
+        )
+    result, _ = call("send_text", "hello", speak_response=False)
+    assert result.returncode == 0
+    body = ha_http.conversations[-1]["body"]
+    assert (
+        body["agent_id"] == "conversation.configured"
+        and body["conversation_id"] == "configured-existing-id"
+    )
+    assert not (path / "eoai_conversation.json").exists()
+    assert json.loads(cache.read_text())["id"] == "configured-existing-id"
+
+
+@pytest.mark.parametrize("initial", [None, "not JSON"])
+def test_error_response_restores_absent_or_malformed_original_cache(text_device, initial):
+    call, path, _ = text_device
+    cache = path / "eoai_conversation.json"
+    if initial is not None:
+        cache.write_text(initial)
+    result, reply = call("send_text", "FAIL", speak_response=False)
+    assert result.returncode != 0 and reply["error"] == "conversation_failed"
+    assert (cache.read_text() if cache.exists() else None) == initial
+
+
+def test_real_http_401_reuses_original_refresh_then_same_agent_and_conversation(
+    text_device, ha_http
+):
+    call, path, _ = text_device
+    call("voice", "my name is Alice", speak_response=False)
+    state = json.loads((path / "eoai_conversation.json").read_text())
+    state["ts"] -= 60
+    (path / "eoai_conversation.json").write_text(json.dumps(state))
+    original = (path / "existing-listener").read_text()
+    ha_http.valid_token = "expired-on-server"
+    start = len(ha_http.conversations)
+    before = int(time.time())
+    result, reply = call("send_text", "what is my name", speak_response=False)
+    assert result.returncode == 0 and reply["reply_text"] == "Alice"
+    attempts = ha_http.conversations[start:]
+    assert len(attempts) == 2
+    assert [r["headers"]["Authorization"] for r in attempts] == [
+        "Bearer synthetic-token",
+        "Bearer synthetic-refreshed",
+    ]
+    assert all(
+        r["body"]["agent_id"] == state["agent"] and r["body"]["conversation_id"] == state["id"]
+        for r in attempts
+    )
+    assert ha_http.refreshes == [
+        {
+            "grant_type": ["refresh_token"],
+            "client_id": ["http://192.0.2.42"],
+            "refresh_token": ["synthetic-refresh-token"],
+        }
+    ]
+    assert (path / "existing-listener").read_text() == original.replace(
+        "HA_TOKEN=synthetic-token", "HA_TOKEN=synthetic-refreshed"
+    )
+    saved = json.loads((path / "eoai_conversation.json").read_text())
+    assert saved["id"] == state["id"] and saved["ts"] >= before
+    assert not (path / "fatal-refresh").exists()
+    assert not list(path.glob("xiaoai_text.*"))
+
+
+def test_real_http_refresh_keeps_no_context_agent_override_isolated(text_device, ha_http):
+    call, path, _ = text_device
+    call("voice", "my name is Alice", speak_response=False)
+    original = (path / "eoai_conversation.json").read_text()
+    ha_http.valid_token = "expired-on-server"
+    result, reply = call(
+        "send_text",
+        "what is my name",
+        speak_response=False,
+        agent_id="conversation.other",
+        use_context=False,
+    )
+    assert result.returncode == 0 and reply["reply_text"] == "unknown"
+    assert all(
+        r["body"]["agent_id"] == "conversation.other" and "conversation_id" not in r["body"]
+        for r in ha_http.conversations[-2:]
+    )
+    assert (path / "eoai_conversation.json").read_text() == original
+    assert not (path / "xiaoai_bridge.context.conversation.other.json").exists()
+    assert len(ha_http.refreshes) == 1
+
+
+@pytest.mark.parametrize(
+    "failure", ["refresh_error", "missing_token", "invalid_token", "second_401", "unknown_launcher"]
+)
+def test_real_http_refresh_failure_does_not_update_cache_or_stop_original_voice(
+    text_device, ha_http, failure
+):
+    call, path, _ = text_device
+    call("voice", "my name is Alice", speak_response=False)
+    cached = (path / "eoai_conversation.json").read_text()
+    listener = (path / "existing-listener").read_text()
+    ha_http.valid_token = "expired-on-server"
+    if failure == "refresh_error":
+        ha_http.refresh_error = True
+    elif failure == "missing_token":
+        ha_http.refresh_body = {}
+    elif failure == "invalid_token":
+        ha_http.refresh_body = {"access_token": "invalid/token"}
+    elif failure == "second_401":
+        ha_http.reject_conversation = True
+    else:
+        (path / "existing-launcher.sh").write_text("# Unknown auth implementation: do not guess\n")
+    start = len(ha_http.conversations)
+    result, reply = call("send_text", "hello", speak_response=False)
+    assert result.returncode != 0 and reply["error"] == "conversation_failed"
+    assert len(ha_http.conversations[start:]) == (2 if failure == "second_401" else 1)
+    assert len(ha_http.refreshes) == (0 if failure == "unknown_launcher" else 1)
+    assert (path / "eoai_conversation.json").read_text() == cached
+    if failure != "second_401":
+        assert (path / "existing-listener").read_text() == listener
+    assert not (path / "fatal-refresh").exists()
+    assert not list(path.glob("xiaoai_text.*"))
+
+
+@pytest.mark.parametrize("text", ["HTTP_FAIL", "DROP", "MALFORMED", "NO_ID", "FAIL"])
+def test_real_http_non_auth_failure_is_never_retried_or_refreshed(text_device, ha_http, text):
+    call, path, _ = text_device
+    call("voice", "my name is Alice", speak_response=False)
+    saved = (path / "eoai_conversation.json").read_text()
+    start = len(ha_http.conversations)
+    result, reply = call("send_text", text, speak_response=False)
+    assert result.returncode != 0 and reply["error"] == "conversation_failed"
+    assert len(ha_http.conversations[start:]) == 1 and not ha_http.refreshes
+    assert (path / "eoai_conversation.json").read_text() == saved
+
+
 def test_remote_text_cannot_forge_the_source_snapshot(text_device):
     call, path, env = text_device
     _, reply = call(
@@ -186,29 +440,9 @@ def test_remote_text_cannot_forge_the_source_snapshot(text_device):
     assert reply["source"] == "mpd"
 
 
-def test_native_volume_intent_does_not_fall_through_to_master_or_conversation(text_device):
+def test_native_volume_intent_does_not_fall_through_to_master_or_conversation(text_device, ha_http):
     call, path, env = text_device
-    script(
-        path / "tools/curl",
-        """#!/bin/sh
-body='';previous=''
-for arg in "$@";do
- [ "$previous" != --data-binary ] || body=$arg
- previous=$arg
- case "$arg" in
-  */volume_plan)
-   if printf '%s' "$body" | jq -e '.local_intent=="VolumeUp"' >/dev/null;then
-    printf '{"error":"unsupported_volume_target"}'
-   else
-    printf '{"handled":false}'
-   fi
-   exit 0 ;;
-  */intent) printf 'VolumeUp';exit 0 ;;
- esac
-done
-exit 1
-""",
-    )
+    ha_http.intent = "VolumeUp"
     result, payload = call("voice", "大声点", speak_response=False)
     assert result.returncode != 0 and payload["error"] == "unsupported_volume_target"
     assert not (path / "mixer-writes").exists()
@@ -219,7 +453,12 @@ def test_temporary_tts_volume_restores_after_cancellation(text_device, speaker_s
     call, path, env = text_device
     payload = {"text": "long speech", "volume": 25}
     proc = subprocess.Popen(
-        [*speaker_shell, str(ROOT / "speaker/lib/text.sh"), "announce", json.dumps(payload)],
+        [
+            *speaker_shell,
+            str(Path(env["XIAOAI_BRIDGE_DIR"]) / "lib/text.sh"),
+            "announce",
+            json.dumps(payload),
+        ],
         env={**env, "TTS_SLEEP": "5"},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -288,7 +527,7 @@ def test_remote_conversation_releases_context_lock_before_waiting_for_voice_audi
         proc = subprocess.Popen(
             [
                 *speaker_shell,
-                str(ROOT / "speaker/lib/text.sh"),
+                str(Path(env["XIAOAI_BRIDGE_DIR"]) / "lib/text.sh"),
                 "send_text",
                 json.dumps({"text": "hello"}),
             ],

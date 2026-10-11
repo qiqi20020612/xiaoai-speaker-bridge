@@ -8,6 +8,8 @@
   "task_timeout": 180,
   "adapter": "/data/xiaoai_bridge/lib/device.sh",
   "listener_config": "/data/listener",
+  "eoai_agent_script": "/data/eoai_agent.sh",
+  "ha_auth_source": "/data/porcupine_launcher_kws",
   "tts_path": "/data/tts_doubao",
   "enable_listener_adapter": false,
   "verified": {

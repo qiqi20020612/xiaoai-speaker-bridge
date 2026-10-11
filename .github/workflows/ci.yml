@@ -24,7 +24,7 @@ jobs:
           python-version: "3.14"
           cache: pip
       - run: python -m pip install -r requirements-dev.txt
-      - name: Build checksum-verified BusyBox 1.36.1 ash and flock
+      - name: Build checksum-verified BusyBox 1.36.1 ash, flock, awk and sed
         run: |
           mkdir -p build
           curl --fail --location --retry 3 https://busybox.net/downloads/busybox-1.36.1.tar.bz2 --output build/busybox-1.36.1.tar.bz2
@@ -43,6 +43,8 @@ jobs:
           grep -F 'BusyBox v1.36.1' build/busybox-version.txt
           build/busybox-1.36.1/busybox --list | grep -Fx ash
           build/busybox-1.36.1/busybox --list | grep -Fx flock
+          build/busybox-1.36.1/busybox --list | grep -Fx awk
+          build/busybox-1.36.1/busybox --list | grep -Fx sed
           echo "XIAOAI_TEST_BUSYBOX=$PWD/build/busybox-1.36.1/busybox" >> "$GITHUB_ENV"
       - name: Privacy and integration metadata
         run: |

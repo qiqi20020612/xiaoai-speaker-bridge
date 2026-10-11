@@ -22,7 +22,9 @@ def busybox_binary():
     applets = subprocess.run(
         [str(path), "--list"], check=True, capture_output=True, text=True
     ).stdout.splitlines()
-    assert {"ash", "flock"} <= set(applets), "BusyBox must include ash and flock"
+    assert {"ash", "flock", "awk", "sed"} <= set(applets), (
+        "BusyBox must include ash, flock, awk and sed"
+    )
     return str(path)
 
 

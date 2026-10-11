@@ -51,10 +51,14 @@ if [ "$MODE" != voice ] && voice_busy; then fail busy; fi
 
 LISTENER_CONFIG=$(config_value '.listener_config // "/data/listener"')
 # This trusted local config loads the existing Agent and OAuth variables.
-# It is never received from the network and is never changed by this script.
+# It is never received from the network or replaced. Only the original OAuth
+# renewal function may update its existing HA_TOKEN line.
 if [ "$MODE" != announce ]; then
+    ORIGINAL_CURL=$(command -v curl)
     [ -r "$LISTENER_CONFIG" ] || fail listener_config_missing
     . "$LISTENER_CONFIG"
+    . "$BRIDGE_DIR/lib/conversation.sh"
+    bridge_load_conversation_adapter "$ORIGINAL_CURL" || fail conversation_adapter_missing
 fi
 TTS_PATH=$(config_value '.tts_path // "/data/tts_doubao"')
 [ -x "$TTS_PATH" ] || fail tts_unavailable
@@ -230,19 +234,20 @@ else
             ;;
         *)
             if [ "$MODE" != voice ] && voice_busy;then fail busy;fi
-            payload=$(jq -nc --arg text "$TEXT" --arg language "${STT_LANGUAGE:-zh-CN}" '{text:$text,language:$language}')
+            payload=$(jq -nc --arg text "$TEXT" --arg language "${STT_LANGUAGE:-zh-CN}" \
+                --arg agent "$EOAIC2_AGENT_ID" '{text:$text,language:$language,agent_id:$agent}')
             had_state=false
             [ -f "$EOAIC2_STATE" ] && { cp -p "$EOAIC2_STATE" "$WORK/previous.json";had_state=true; }
-            # Call the original shell function loaded by listener, with its original refresh path.
-            if ! response=$(curl --connect-timeout 3 --max-time 90 -H "Authorization: Bearer ${HA_TOKEN}" \
-                -H 'Content-Type: application/json' -d "$payload" \
-                -XPOST "${HA_URL%/}/api/conversation/process" 2>/dev/null); then
-                if [ "$had_state" = true ]; then cat "$WORK/previous.json" | atomic_json "$EOAIC2_STATE";else rm -f "$EOAIC2_STATE";fi
+            # The explicitly loaded original Agent injects conversation_id and
+            # owns successful sliding-cache updates; a confirmed 401 renews once.
+            if ! bridge_conversation_request "$payload"; then
+                bridge_restore_conversation_state || fail context_restore_failed
                 fail conversation_failed
             fi
-            if ! printf '%s' "$response" | jq -e '(.response|type)=="object" and .response.response_type!="error"' >/dev/null 2>&1; then
+            response=$(cat "$WORK/conversation.json")
+            if ! printf '%s' "$response" | jq -e '(.conversation_id|type)=="string" and (.conversation_id|length)>0 and (.response|type)=="object" and .response.response_type!="error"' >/dev/null 2>&1; then
                 # Existing wrappers can update state on error responses; undo only under the shared lock.
-                if [ "$had_state" = true ]; then cat "$WORK/previous.json" | atomic_json "$EOAIC2_STATE";else rm -f "$EOAIC2_STATE";fi
+                bridge_restore_conversation_state || fail context_restore_failed
                 fail conversation_failed
             fi
             reply=$(printf '%s' "$response" | jq -r '.response.speech.plain.speech // ""')
