@@ -665,3 +665,21 @@ bridge_restore_volume
     profile = (path / "xiaoai_bridge.profile").read_text()
     assert "phase=wake_led" in profile and "phase=recording_ready" in profile
     assert "synthetic-token" not in profile
+
+
+def test_multiline_request_remains_literal_and_profile_has_no_text(text_device):
+    call, path, env = text_device
+    text = "line one\nline two with $(no_command) and `no_command`"
+    pipeline = path / "bridge/lib/text.sh"
+    result = subprocess.run(
+        ["sh", str(pipeline), "announce", json.dumps({"text": text})],
+        env={**env, "XIAOAI_PROFILE": "1"},
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (path / "tts-calls").read_text().strip() == text
+    trace = (path / "xiaoai_bridge.profile").read_text()
+    assert "phase=task_parsed" in trace and "phase=tts_launch" in trace
+    assert "line one" not in trace and "synthetic-token" not in trace

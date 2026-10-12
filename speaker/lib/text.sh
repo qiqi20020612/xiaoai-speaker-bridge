@@ -4,13 +4,34 @@ set -eu
 . "${XIAOAI_BRIDGE_DIR:-/data/xiaoai_bridge}/lib/common.sh"
 MODE=$1
 REQUEST=$2
-printf '%s' "$REQUEST" | jq -e '
-  (.text|type)=="string" and
+bridge_profile task_begin
+# Read every request field with one jq startup. The final field is the raw
+# multiline text; it is read as data, never evaluated as shell code.
+PARSED=$(printf '%s' "$REQUEST" | jq -r '
+  if ((.text|type)=="string" and
   (if has("speak_response") then (.speak_response|type)=="boolean" else true end) and
   (if has("use_context") then (.use_context|type)=="boolean" else true end) and
-  (if has("volume") then (.volume|type)=="number" and .volume>=0 and .volume<=100 else true end)
-' >/dev/null || fail invalid_request
-TEXT=$(request_value '.text')
+  (if has("volume") then (.volume|type)=="number" and .volume>=0 and .volume<=100 else true end) and
+  (if has("duck_volume") then (.duck_volume|type)=="number" and .duck_volume>=0 and .duck_volume<=100 else true end) and
+  (if has("agent_id") then .agent_id==null or ((.agent_id|type)=="string" and (.agent_id|test("^conversation[.][a-zA-Z0-9_]+$"))) else true end) and
+  (.text|contains("\u0000")|not)) then
+  (if has("speak_response") then .speak_response else true end),
+  (if has("use_context") then .use_context else true end),
+  (.volume // ""), (.duck_volume // ""), (.agent_id // ""), ((._snapshot // {})|tojson), .text
+  else error("invalid_request") end' 2>/dev/null) || fail invalid_request
+{
+    IFS= read -r SPEAK_RESPONSE
+    IFS= read -r USE_CONTEXT
+    IFS= read -r OVERRIDE
+    IFS= read -r DUCK_VOLUME
+    IFS= read -r AGENT
+    IFS= read -r SNAPSHOT
+    TEXT=$(cat)
+} <<EOF
+$PARSED
+EOF
+unset PARSED
+bridge_profile task_parsed
 [ -n "$TEXT" ] && [ "${#TEXT}" -le 4096 ] || fail invalid_text
 WORK=$(mktemp -d "$BRIDGE_RUNTIME/xiaoai_text.XXXXXX") || fail local_resource_failed
 TTS_OVERRIDE_ACTIVE=false
@@ -33,6 +54,7 @@ restore_tts_volume() {
 cleanup() {
     trap - HUP INT TERM
     restore_tts_volume || true
+    bridge_profile task_cleanup
     if [ "$VOICE_GUARD_ACTIVE" = true ]; then
         command curl -fsS --connect-timeout 1 --max-time 2 \
             -H "Authorization: Bearer ${HA_TOKEN}" -H 'Content-Type: application/json' \
@@ -46,10 +68,24 @@ trap 'exit 143' HUP INT TERM
 # Do not queue general work here. HA queues it; local locks only protect the device.
 if [ "$MODE" != voice ] && voice_busy; then fail busy; fi
 exec 9> "$BRIDGE_RUNTIME/xiaoai_bridge.session.lock"
+bridge_profile session_wait
 if [ "$MODE" = voice ]; then bridge_lock_for 120 9 || fail busy; else flock -n 9 || fail busy; fi
+bridge_profile session_ready
 if [ "$MODE" != voice ] && voice_busy; then fail busy; fi
 
-LISTENER_CONFIG=$(config_value '.listener_config // "/data/listener"')
+CONFIG_FIELDS=$(config_value '(.listener_config // "/data/listener"), (.tts_path // "/data/tts_doubao"), (.device_id // ""), (.verified.led // false), (.verified.announcement_ducking // false), (.eoai_agent_script // "/data/eoai_agent.sh"), (.ha_auth_source // "/data/porcupine_launcher_kws")')
+{
+    IFS= read -r LISTENER_CONFIG
+    IFS= read -r TTS_PATH
+    IFS= read -r DEVICE_ID
+    IFS= read -r TASK_LED_VERIFIED
+    IFS= read -r DUCK_VERIFIED
+    IFS= read -r BRIDGE_CONFIG_EOAI
+    IFS= read -r BRIDGE_CONFIG_AUTH
+} <<EOF
+$CONFIG_FIELDS
+EOF
+unset CONFIG_FIELDS
 # This trusted local config loads the existing Agent and OAuth variables.
 # It is never received from the network or replaced. Only the original OAuth
 # renewal function may update its existing HA_TOKEN line.
@@ -60,8 +96,8 @@ if [ "$MODE" != announce ]; then
     . "$BRIDGE_DIR/lib/conversation.sh"
     bridge_load_conversation_adapter "$ORIGINAL_CURL" || fail conversation_adapter_missing
 fi
-TTS_PATH=$(config_value '.tts_path // "/data/tts_doubao"')
 [ -x "$TTS_PATH" ] || fail tts_unavailable
+bridge_profile config_ready
 
 speak() {
     utterance=$1
@@ -71,12 +107,12 @@ speak() {
         inherited_audio=true
     else
         exec 8> "$BRIDGE_RUNTIME/xiaoai_bridge.audio.lock"
+        bridge_profile audio_wait
         bridge_lock_for 120 8 || fail busy
+        bridge_profile audio_ready
     fi
-    override=$(request_value '.volume // empty')
-    saved_tts=$(percent notifyvol)
+    override=$OVERRIDE
     rev_before=0
-    [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] && rev_before=$(jq -r '.revision // 0' "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
     if [ -n "$override" ]; then
         exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
         bridge_lock_for 3 7 || fail busy
@@ -90,6 +126,7 @@ speak() {
         flock -u 7
     fi
     printf '{"stage":"synthesizing"}\n'
+    bridge_profile tts_launch
     "$TTS_PATH" "$utterance" > /dev/null 2>&1 &
     tts_pid=$!
     # Only inspect descendants of this TTS invocation; other media never implies playing.
@@ -111,11 +148,12 @@ speak() {
                 [ "$playing" = true ] && break
                 pending=$next
             done
-            if [ "$playing" = true ]; then printf '{"stage":"playing"}\n';break;fi
+            if [ "$playing" = true ]; then printf '{"stage":"playing"}\n';bridge_profile tts_playing;break;fi
         fi
         sleep 0.25
     done
     result=0;wait "$tts_pid" || result=$?
+    bridge_profile tts_finished
     restore_tts_volume || result=1
     [ "$inherited_audio" = true ] || flock -u 8
     return "$result"
@@ -128,14 +166,8 @@ if [ "$MODE" = announce ]; then
     exit 0
 fi
 
-SPEAK_RESPONSE=$(request_value '.speak_response // true')
-# jq's // treats false as absent, so test the explicit boolean separately.
-[ "$(request_value '.speak_response')" = false ] && SPEAK_RESPONSE=false
-USE_CONTEXT=true
-[ "$(request_value '.use_context')" = false ] && USE_CONTEXT=false
 DEFAULT_AGENT=${EOAIC2_AGENT_ID:-}
 [ -n "$DEFAULT_AGENT" ] || fail conversation_adapter_missing
-AGENT=$(request_value '.agent_id // empty')
 if [ -z "$AGENT" ] && [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json" ]; then
     AGENT=$(jq -r '.agent_id // empty' "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json")
 fi
@@ -157,11 +189,10 @@ elif [ "$EOAIC2_AGENT_ID" != "$DEFAULT_AGENT" ]; then
 fi
 [ -n "${EOAIC2_STATE:-}" ] || fail conversation_adapter_missing
 
-SNAPSHOT=$(request_value '._snapshot // empty')
-if [ "$MODE" != voice ] || [ -z "$SNAPSHOT" ]; then
+if [ "$MODE" != voice ] || [ "$SNAPSHOT" = '{}' ]; then
     SNAPSHOT=$("$BRIDGE_DIR/lib/source-snapshot.sh" 2>/dev/null || printf '{"source":null,"uncertain":true}')
 fi
-DEVICE_ID=$(config_value '.device_id')
+bridge_profile sources_ready
 if [ "$MODE" = voice ]; then
     guard_id="voice-$$-$(date +%s)"
     jq -nc --arg id "$guard_id" '{request_id:$id}' > "$WORK/guard-end.json"
@@ -170,12 +201,14 @@ if [ "$MODE" = voice ]; then
         -H "Authorization: Bearer ${HA_TOKEN}" -H 'Content-Type: application/json' \
         --data-binary "$guard_body" "${HA_URL%/}/api/xiaoai_speaker/$DEVICE_ID/voice_guard" 2>/dev/null || true)
     printf '%s' "$guard_reply" | jq -e '.accepted==true' >/dev/null 2>&1 && VOICE_GUARD_ACTIVE=true
+    bridge_profile voice_guard_finished
 fi
 PLAN_BODY=$(jq -nc --arg text "$TEXT" --argjson snapshot "$SNAPSHOT" '{text:$text,snapshot:$snapshot}')
 # This HA view resolves volume rules only. Conversations still originate below on LX06.
 PLAN=$(command curl -sS --connect-timeout 2 --max-time 4 \
     -H "Authorization: Bearer ${HA_TOKEN}" -H 'Content-Type: application/json' \
     --data-binary "$PLAN_BODY" "${HA_URL%/}/api/xiaoai_speaker/$DEVICE_ID/volume_plan" 2>/dev/null || true)
+bridge_profile volume_plan_finished
 reject_volume_plan() {
     if printf '%s' "$PLAN" | jq -e '.error=="unsupported_volume_target" or .error=="volume_unknown" or .error=="invalid_volume"' >/dev/null 2>&1; then
         flock -u 9
@@ -202,6 +235,7 @@ if printf '%s' "$PLAN" | jq -e '.handled==true' >/dev/null 2>&1; then
 else
     # Reuse the existing local intent stage before the existing Agent.
     intent=$(command curl -fsS --connect-timeout 1 --max-time 2 --form-string "text=$TEXT" http://127.0.0.1/intent 2>/dev/null || true)
+    bridge_profile intent_finished
     case "$intent" in
         BluetoothPair)
             timeout 30 /bin/bluetooth_pair >/dev/null 2>&1 || fail local_intent_failed
@@ -240,10 +274,12 @@ else
             [ -f "$EOAIC2_STATE" ] && { cp -p "$EOAIC2_STATE" "$WORK/previous.json";had_state=true; }
             # The explicitly loaded original Agent injects conversation_id and
             # owns successful sliding-cache updates; a confirmed 401 renews once.
+            bridge_profile conversation_begin
             if ! bridge_conversation_request "$payload"; then
                 bridge_restore_conversation_state || fail context_restore_failed
                 fail conversation_failed
             fi
+            bridge_profile conversation_finished
             response=$(cat "$WORK/conversation.json")
             if ! printf '%s' "$response" | jq -e '(.conversation_id|type)=="string" and (.conversation_id|length)>0 and (.response|type)=="object" and .response.response_type!="error"' >/dev/null 2>&1; then
                 # Existing wrappers can update state on error responses; undo only under the shared lock.
