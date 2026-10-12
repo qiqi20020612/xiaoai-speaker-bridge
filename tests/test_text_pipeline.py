@@ -580,3 +580,88 @@ bridge_error_tts
         _, stderr = proc.communicate(timeout=5)
         assert proc.returncode == 0 and not stderr
         assert (path / "tts-calls").read_text().strip() == "error"
+
+
+@pytest.mark.parametrize(
+    "ap,bt,mpd",
+    [(a, b, m) for a in (False, True) for b in (False, True) for m in ("play", "stop", "unknown")],
+)
+def test_snapshot_single_jq_keeps_all_source_combinations(text_device, speaker_shell, ap, bt, mpd):
+    _, path, env = text_device
+    tools = path / "tools"
+    real_jq = shutil.which("jq")
+    script(tools / "jq", f'#!/bin/sh\nprintf x >> "$STATE_DIR/jq-count"\nexec "{real_jq}" "$@"\n')
+    script(
+        tools / "dbus-send",
+        f'''#!/bin/sh
+case "$*" in *org.bluez*)
+ printf 'string "State"\\nvariant string "{"active" if bt else "idle"}"\\n' ;;
+ *) printf 'string "Active"\\nvariant boolean {str(ap).lower()}\\n' ;;
+esac
+''',
+    )
+    bridge = tools / "fake-bridge"
+    script(
+        bridge,
+        f"""#!/bin/sh
+case "$1" in
+ --snapshot) printf '{{"source":"mpd","uncertain":false}}\\n' ;;
+ --mpd-state) printf '{mpd}\\n' ;;
+esac
+""",
+    )
+    result = subprocess.run(
+        [*speaker_shell, str(path / "bridge/lib/source-snapshot.sh"), "42", "60", "50"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    snapshot = json.loads(result.stdout)
+    sources = (
+        (["airplay"] if ap else [])
+        + (["bluetooth"] if bt else [])
+        + (["mpd"] if mpd == "play" else [])
+    )
+    assert snapshot["active_sources"] == sources
+    assert snapshot["source"] == (
+        "mpd" if "mpd" in sources else sources[0] if len(sources) == 1 else None
+    )
+    assert snapshot["uncertain"] == (mpd == "unknown" or len(sources) > 1)
+    assert snapshot["volumes"] == {"master": 60, "bluetooth": 50}
+    assert snapshot["pid"] == 42
+    assert (path / "jq-count").read_text() == "x"
+
+
+def test_wake_led_precedes_slow_snapshot_and_attenuation(text_device, speaker_shell):
+    _, path, env = text_device
+    led = path / "tools/show-led"
+    script(led, '#!/bin/sh\nprintf "%s\\n" led >> "$STATE_DIR/order"\n')
+    snapshot = path / "bridge/lib/source-snapshot.sh"
+    snapshot.write_text(
+        snapshot.read_text().replace(
+            'base=$("$BRIDGE_BIN"',
+            'printf "%s\\n" snapshot >> "$STATE_DIR/order"\nsleep 0.1\nbase=$("$BRIDGE_BIN"',
+        )
+    )
+    hooks = path / "bridge/lib/listener-hooks.sh"
+    hooks.write_text(hooks.read_text().replace("/bin/show_led", str(led)))
+    body = f'''. "{hooks}"
+bridge_voice_begin || exit 1
+printf '%s\\n' attenuation >> "$STATE_DIR/order"
+SAVED_VOL=60
+bridge_restore_volume
+'''
+    result = subprocess.run(
+        [*speaker_shell, "-c", body],
+        env={**env, "XIAOAI_PROFILE": "1"},
+        capture_output=True,
+        text=True,
+        timeout=6,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (path / "order").read_text().splitlines() == ["led", "snapshot", "attenuation"]
+    profile = (path / "xiaoai_bridge.profile").read_text()
+    assert "phase=wake_led" in profile and "phase=recording_ready" in profile
+    assert "synthetic-token" not in profile

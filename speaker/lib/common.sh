@@ -7,6 +7,19 @@ BRIDGE_DIR=${XIAOAI_BRIDGE_DIR:-/data/xiaoai_bridge}
 BRIDGE_BIN=${XIAOAI_BRIDGE_BIN:-$BRIDGE_DIR/bin/xiaoai_bridge}
 . "${XIAOAI_BRIDGE_HELPER_DIR:-$BRIDGE_DIR/lib}/locks.sh"
 
+# Opt-in, bounded phase trace. Only phase names/PID/monotonic timestamps; no text,
+# request payloads, credentials or responses. Linux read/printf are shell builtins.
+bridge_profile() {
+    [ "${XIAOAI_PROFILE:-0}" = 1 ] || return 0
+    profile_file="$BRIDGE_RUNTIME/xiaoai_bridge.profile"
+    if [ -f "$profile_file" ] && [ "$(wc -c < "$profile_file")" -ge 65536 ]; then
+        mv -f "$profile_file" "$profile_file.1"
+    fi
+    profile_clock=unavailable
+    [ ! -r /proc/uptime ] || read profile_clock profile_rest < /proc/uptime
+    printf 'pid=%s phase=%s uptime=%s\n' "$$" "$1" "$profile_clock" >> "$profile_file"
+}
+
 fail() { printf '{"error":"%s"}\n' "$1"; exit 1; }
 config_value() { jq -r "$1" "$BRIDGE_CONFIG" 2>/dev/null; }
 flag() { [ "$(config_value "$1 // false")" = true ]; }

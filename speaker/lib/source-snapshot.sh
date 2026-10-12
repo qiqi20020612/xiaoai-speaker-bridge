@@ -10,9 +10,11 @@ bluez=$(dbus-send --system --print-reply --reply-timeout=600 --dest=org.bluez / 
     org.freedesktop.DBus.ObjectManager.GetManagedObjects 2>/dev/null || true)
 bt_active=false
 printf '%s' "$bluez" | awk '/string "State"/{found=1;next} found&&/variant/{if($0~/string "active"/){ok=1;exit}found=0} END{exit !ok}' && bt_active=true
-sources=$(jq -nc --argjson ap "${ap_active:-false}" --argjson bt "$bt_active" --arg mpd "$mpd" \
-    '[if $ap then "airplay" else empty end, if $bt then "bluetooth" else empty end, if $mpd=="play" then "mpd" else empty end]')
 unknown=false
 [ -z "$ap_active" ] || [ "$mpd" = unknown ] && unknown=true
-printf '%s' "$base" | jq -c --argjson sources "$sources" --argjson unknown "$unknown" \
-    '.source as $old | .active_sources=$sources | .source=(if ($sources|index($old)) then $old elif ($sources|length)==1 then $sources[0] else null end) | .uncertain=($unknown or ($sources|length)>1)'
+printf '%s' "$base" | jq -c --argjson ap "${ap_active:-false}" --argjson bt "$bt_active" --arg mpd "$mpd" \
+    --argjson unknown "$unknown" --argjson pid "${1:-0}" --argjson master "${2:-null}" --argjson bluetooth "${3:-null}" \
+    '[if $ap then "airplay" else empty end, if $bt then "bluetooth" else empty end, if $mpd=="play" then "mpd" else empty end] as $sources |
+     .source as $old | .active_sources=$sources | .source=(if ($sources|index($old)) then $old elif ($sources|length)==1 then $sources[0] else null end) |
+     .uncertain=($unknown or ($sources|length)>1) |
+     if $pid>0 then .+{type:"voice_begin",pid:$pid,volumes:{master:$master,bluetooth:$bluetooth}} else . end'

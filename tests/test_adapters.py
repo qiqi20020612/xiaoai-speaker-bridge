@@ -16,6 +16,7 @@ while true; do
 kws_guard
 SAVED_VOL=`current_volume`
 set_volume 10
+/bin/show_led 1
 STT_TEXT="test"
     if [ "${API_AVAILABLE}" = "1" ]; then
       intent_run test
