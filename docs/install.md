@@ -21,33 +21,34 @@ python3 tools/package_speaker.py --binary build/armhf/xiaoai_bridge --output dis
 
 ## 2. 准备私有适配副本
 
-只读获取音箱实际 `/data/porcupine_launcher_kws` 和 `/data/airplay_volume_led`，保存在工作站 `.private/`。不将 `/data/listener`、HA/OAuth 配置或整个 `/data` 放进安装包/公开仓库。
+只读获取音箱实际 `/data/porcupine_launcher_kws` 、`/data/kws_guard.sh` 和 `/data/airplay_volume_led`，保存在工作站 `.private/`。不将 `/data/listener`、HA/OAuth 配置或整个 `/data` 放进安装包/公开仓库。
 
 ```sh
 python3 speaker/tools/prepare_adapters.py \
   --listener .private/original-launcher \
+  --kws-guard .private/original-kws-guard \
   --airplay-led .private/original-airplay-led \
   --output .private/prepared
 ```
 
-工具按已审核的 source 顺序及锚点生成 `listener.sh`、`airplay-led.sh`、每个文件的 `.diff` 和 `review.json`。原文件不变，未知版本锚点不匹配时失败，不自动猜测。生成的副本保留原双通道 KWS、录音/STT、错误提示等部分，只替换 STT 后文本入口与音量恢复，并在函数定义之后加载 hooks。
+工具按已审核的 source 顺序及锚点生成 `listener.sh`、`kws-guard.sh`、`airplay-led.sh`、每个文件的 `.diff` 和 `review.json`。原文件不变，未知版本锚点不匹配时失败，不自动猜测。生成的副本保留原双通道 KWS、录音/STT、错误提示等部分，只替换 STT 后文本入口与音量恢复，并在函数定义之后加载 hooks。
 
 审阅重点：
 
 1. `bridge_voice_begin` 位于 `SAVED_VOL` 与降音量之前；恢复调用改为按通道版本安全恢复。
-2. 原 KWS guard、麦克风通道、STT、语言和音频设备设置均保留。
+2. 原 KWS client、麦克风通道、STT、语言和音频设备设置均保留；私有 guard 副本加入串行锁和正确进程身份判断，不改原 guard。
 3. 原 `/data/listener` 在执行时加载，因此 Agent、OAuth token 刷新与 TTS 参数没有被复制到新版配置。
 4. LED `draw()` 和后台 worker 在语音活动时退让；自派生 worker 仍位于桥接同一端。
 
-0.1.4 的 `review.json` 为 format=2，包含 Listener hooks/LED guard 兼容版本。安装器和启用工具都检查原始/输出 SHA256、wake hook 顺序以及无残留 LED 命令；旧 format=1 不静默沿用，要求用本版工具重新生成。
+0.1.5 的 `review.json` 为 format=3，包含 Listener hooks/LED guard 兼容版本。安装器和启用工具都检查原始/输出 SHA256、wake hook 和初始化顺序，保留合法的加载 LED 2 和结束 LED 11，仅将唤醒 LED 1 交给 hook；旧 format=1 不静默沿用，要求用本版工具重新生成。
 
-审核通过后，将私有生成目录放入**本机私有部署副本** `xiaoai_bridge/adapter/`。不要上传这份混合了本机原脚本的副本。通用包的 `SHA256SUMS` 核验通用文件；`review.json` 单独核验私有生成文件。
+审核通过后，将私有生成目录放入**本机私有部署副本** `xiaoai_bridge/adapter/`。不要上传这份混合了本机原脚本的副本。通用包的 `SHA256SUMS` 核验通用文件；安装后使用 `INSTALLED_SHA256SUMS` 核验已部署通用文件，boot 单独按包内哈希核验；`review.json` 单独核验私有生成文件。
 
 若已经启用旧 AirPlay LED 保护，升级预览可能提示 active guard 与新副本不匹配。此时先运行**仍在工作的旧安装目录** `tools/activate_airplay_led.sh --remove` 恢复原 LED 程序，再安装新包；升级后按第 5 节审核启用新版保护。不要在旧保护仍引用旧 review 时直接替换其适配副本。升级期间保持 `verified.task_led=false`，只在新版保护验证后开启；该开关默认关闭，不改变旧手动灯光验证。
 
 ## 3. 日后在 LX06 上预览及安装
 
-先核对 `jq`、`flock`、`curl`、`amixer`、`sha256sum`、`timeout`、DBus 工具以及现有脚本。检查 `/data` 空間，安装器计算新包、原包备份和余量，空间不足时拒绝安装。
+先核对 `jq`、`flock`、`curl`、`amixer`、`sha256sum`、`timeout`、DBus 工具以及现有脚本。检查 `/data` 空間，安装器计算新包、两份原包恢复空间和 512 KiB 余量；预检先于旧备份留存，空间不足时拒绝安装。
 
 将审阅的部署副本解压在 `/tmp`，保留 `/data` 的存储空间，然后在音箱本地执行：
 
@@ -59,7 +60,7 @@ sh /tmp/xiaoai_bridge/install.sh --apply
 
 安装器：
 
-- 验证通用包 SHA256，保存原 boot、Cron 和已有 bridge 的不可变快照；备份有明确事务状态，已完成/恢复的旧备份以唯一名称保留，不覆盖。
+- 验证通用包 SHA256，取得原 OAuth Cron 的目录锁与新配置 FD，停止自己的 Bridge/Listener 写入后，保存原 boot、Cron 和已有 bridge 的不可变快照；备份有明确事务状态，已完成/恢复的旧备份以唯一名称保留，不覆盖。
 - 原子切换 `/data/xiaoai_bridge/`，新安装生成一次随机设备 UUID 与 64 位十六进制桥接令牌；升级保留原配置，只沿用已符合本版校验的私有适配；不兼容时明确拒绝并要求重新生成。
 - 保留所有原 Cron 行，只去重并补充标准 boot 行；更新已有 `/data/xiaoai_boot.sh`，不另建启动服务。
 - 不改只读固件；不关闭 Snapclient/upmpdcli；不清除已完成的 boot 标志，也不因为升级重复停用临时手动开启的 Squeezelite。
@@ -67,11 +68,11 @@ sh /tmp/xiaoai_bridge/install.sh --apply
 
 所有音箱 Shell 锁使用 BusyBox 支持的 `-s/-x/-u/-n`。超时锁通过 `lib/locks.sh` 使用同一个继承 FD、非阻塞独占锁和 1 秒粒度的有界等待；Linux 读取 `/proc/uptime` 检查单调截止时间。原 3/5/120 秒预算保持，无无限等待，不删除锁文件。`--dry-run` 也会在只读 FD 上试用实际锁接口。安装器另持有 boot 的内核锁，阻止旧 Cron 在目录切换/恢复期间启动半安装的桥接。
 
-0.1.3 的每次 probe 允许 15 秒，超时只终止自己的 worker 进程组，最多再等 5 秒退出。首次探测失败后等待 1、2 秒进行两次重试；`start.sh` 最多等待 75 秒，足够容纳三次探测及退出宽限。已有桥接进程尚在初始化时等待同一个实例；首次成功 probe 前 HTTP 健康状态仍为 503。连续三次失败或进程退出才触发失败恢复；其余未就绪情况到启动截止时间后失败。C 服务单独运行时，在首次重试耗尽后仍按 15 秒间隔继续探测，不自行影响原服务。
+0.1.3 的每次 probe 允许 15 秒，超时只终止自己的 worker 进程组，最多再等 5 秒退出。首次探测失败后等待 1、2 秒进行两次重试；`start.sh` 最多等待 75 秒，足够容纳三次探测及退出宽限。已有桥接进程尚在初始化时等待同一个实例；首次成功 probe 前 HTTP 健康状态仍为 503。0.1.5 的任务清理宽限为 20 秒，probe 的 5 秒宽限不变；停止脚本最多等 25 秒。连续三次失败或进程退出才触发失败恢复；其余未就绪情况到启动截止时间后失败。C 服务单独运行时，在首次重试耗尽后仍按 15 秒间隔继续探测，不自行影响原服务。
 
-**从 0.1.3 或更早版本升级到 0.1.4 时，先重新生成并审阅私有适配副本，再用完整包执行 `--dry-run`、`--apply`**。配置、身份和兼容私有副本保留。若新安装自动恢复为 `failed_restored`，先保存 `/tmp/xiaoai_bridge.log` 及 `.log.1` 并检查诊断，可直接重试 `--apply`；`recovery_required` 则先用同一完整包 `--rollback`。不要手工删除备份或覆盖原 listener/Agent 配置。
+**从当前已验证的 0.1.3 直接升级到 0.1.5 时，先重新生成并审阅私有适配副本，再用完整包执行 `--dry-run`、`--apply`**。配置、身份和兼容私有副本保留。升级前排空 HA 队列并暂停新任务触发，确认语音和 audio_active 均空闲；旧 0.1.3 无新版安装锁门控，排空到停止间仍须避免新输入。若新安装自动恢复为 `failed_restored`，先保存 `/tmp/xiaoai_bridge.log` 及 `.log.1` 并检查诊断，可直接重试 `--apply`；`recovery_required` 则先用同一完整包 `--rollback`。不要手工删除备份或覆盖原 listener/Agent 配置。
 
-新包首次启动默认不启用语音副本。原 listener 继续运行；在 voice hooks 未就绪时，播报/远程对话和可能被旧恢复覆盖的主/蓝牙音量写入会明确受限。随后必须完成共享入口启用，不能把这种保护状态当成功能验收。
+首次安装默认不启用语音副本；已启用的 0.1.3 升级保留启用状态，不需重复 activate。原 listener 继续运行；在 voice hooks 未就绪时，播报/远程对话和可能被旧恢复覆盖的主/蓝牙音量写入会明确受限。随后必须完成共享入口启用，不能把这种保护状态当成功能验收。
 
 ## 4. 日后单独启用共享语音入口
 
@@ -89,7 +90,7 @@ sh /data/xiaoai_bridge/tools/activate.sh --apply
 
 现有设置逐字保留。该引导仅在原入口名为 `porcupine_launcher`、私有副本存在且本地 enable 标志为 true 时重定向到兄弟副本；普通 reload、OAuth 刷新和重启仍使用同一个原启动链。原 `/data/porcupine_launcher_kws`、系统 `/usr/bin/porcupine_launcher`、KWS/STT/Agent/TTS 脚本均不替换。
 
-启用前检查 source/output SHA256、voice 空闲和配置是否并发改变。禁止在 OAuth 正进行写入时启用；检测到变化会退出，重新读取审阅后重试。listener 通过原 procd 实例运行，停止后等待最多 15 秒异步退出，再确认新实例健康。
+启用前检查 source/output SHA256、voice 空闲和配置是否并发改变。禁止在 OAuth 正进行写入时启用；检测到变化会退出，重新读取审阅后重试。listener 通过原 procd 实例运行，停止后等待最多 15 秒异步退出，再等待最多 90 秒，确认 STT 初始化结束、该实例首次创建 KWS client，并核验带启动时间和 hooks 版本的就绪标记。
 
 移除引导时用 `--remove`，**不会恢复可能含过期 OAuth token 的旧配置整份备份**；仅删除自己的精确 include 行，保留当前刷新后的所有值。完整恢复流程使用安装器回滚/卸载。
 
@@ -124,14 +125,14 @@ HACS 自定义仓库填写本仓库 URL，类型选 Integration。安装并重�
 
 重复 start 不创建多实例；活进程不健康时返回错误，不强行创建第二份。停止只给自己的进程发送 TERM 并等待退出；不 kill 共享播放器、KWS 或音频服务。
 
-开机 Cron 保留原标准行。boot 脚本至少等待 uptime 90 秒，用内核 flock 防并发，先调用原 Squeezelite stop 再等最多 15 秒；成功后启动 bridge、健康确认并写 `/tmp/xiaoai_boot.done`，失败无 done、下次 Cron 重试。桥接缺失可安全跳过。日志位于 `/tmp`，64 KiB 轮转、最多当前及上一份。
+开机 Cron 保留原标准行。boot 脚本至少等待 uptime 90 秒，用内核 flock 防并发，先调用原 Squeezelite stop 再等最多 15 秒；成功后启动 bridge、健康确认并写 `/tmp/xiaoai_boot.done`，失败无 done、下次 Cron 重试。done 之后的 Cron 只检查/恢复 Bridge daemon，不重复 Squeezelite 流程，也不启动被用户停止的 Listener。桥接缺失可安全跳过。日志位于 `/tmp`，64 KiB 轮转、最多当前及上一份。
 
 ```sh
 sh /tmp/xiaoai_bridge/install.sh --rollback
 sh /tmp/xiaoai_bridge/install.sh --uninstall
 ```
 
-回滚使用**运行中的新版安装包**的 `start.sh stop`，不会调用坏的已安装脚本；停止不需要配置文件或二进制完整，PID 必须属于桥接才会发送 TERM。先安全移除自己的 LED/语音引用，保留当前 OAuth/Agent/KWS/STT/TTS 参数，再恢复原 boot/已有 bridge。回滚后的旧 bridge 适配关闭，使用原语音链路；需要桥接语音入口时另行审核并启用。
+回滚使用**运行中的新版安装包**的 `start.sh stop`，不会调用坏的已安装脚本；停止不需要配置文件或二进制完整，PID 必须属于桥接才会发送 TERM。先安全移除自己的 LED/语音引用，保留当前 OAuth/Agent/KWS/STT/TTS 参数，再恢复原 boot/已有 bridge。从 0.1.3 升级失败或回滚时，旧 Bridge 二进制、私有适配器、enable 标志和原 Listener 运行状态原样恢复；已有 Bridge include 保留，当前 OAuth 值不整份回写。首次安装没有旧 Bridge 时才移除自己的 include。
 
 首次安装无旧 bridge 时移除 active 路径。Cron 仅撤销此次新增的标准 boot 行，原来已有的行和安装后新加的任务保留，不整份恢复旧 Cron。失败、暂存、旧 `previous`、卸载目录和快照以唯一名称保留，重复回滚/卸载安全。重装保留设备 UUID/token 和私有副本；先检查 `/data` 余量，再决定何时把已审阅的旧资料归档到工作站。
 

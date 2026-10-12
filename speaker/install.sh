@@ -55,7 +55,7 @@ check_install_adapters() {
 adapters_unchanged() {
     [ -n "$selected_adapter" ] || { [ ! -d "$DEST/adapter" ];return; }
     [ -d "$DEST/adapter" ] || return 1
-    for name in listener.sh review.json airplay-led.sh;do
+    for name in listener.sh kws-guard.sh review.json airplay-led.sh;do
         if [ -e "$selected_adapter/$name" ] || [ -e "$DEST/adapter/$name" ];then
             cmp -s "$selected_adapter/$name" "$DEST/adapter/$name" || return 1
         fi
@@ -108,9 +108,9 @@ voice_idle() {
 # Never invoke a broken installed start.sh. Stop needs neither config nor binary.
 service() {
     XIAOAI_BRIDGE_DIR="$DEST" XIAOAI_BRIDGE_RUNTIME="$RUNTIME" \
-    XIAOAI_BRIDGE_CONFIG="$DEST/config.json" "$PACKAGE/start.sh" "$1" 8>&- 9>&-
+    XIAOAI_BRIDGE_CONFIG="$DEST/config.json" XIAOAI_SKIP_LISTENER_START=1 "$PACKAGE/start.sh" "$1" 4>&- 8>&- 9>&-
 }
-restart_cron() { /etc/init.d/cron restart 8>&- 9>&-; }
+restart_cron() { /etc/init.d/cron restart 4>&- 8>&- 9>&-; }
 install_diagnostic() {
     log="$RUNTIME/xiaoai_bridge.log"
     [ ! -L "$log" ] || return 1
@@ -140,14 +140,14 @@ remove_listener_include() {
     fi
     # Only a bridge include just removed authorizes reloading the original chain.
     if /etc/init.d/listener status >/dev/null 2>&1;then
-        SILENT=1 /etc/init.d/listener stop 8>&- 9>&- || return 1
+        SILENT=1 /etc/init.d/listener stop 4>&- 8>&- 9>&- || return 1
         waited=0
         while /etc/init.d/listener status >/dev/null 2>&1;do
             [ "$waited" -lt 15 ] || return 1
             sleep 1;waited=$((waited+1))
         done
     fi
-    SILENT=1 /etc/init.d/listener start 8>&- 9>&- || return 1
+    SILENT=1 /etc/init.d/listener start 4>&- 8>&- 9>&- || return 1
     rm -f "$pending"
 }
 restore_led() {
@@ -204,11 +204,52 @@ restore_boot_cron() {
     fi
     restart_cron
 }
+stop_listener() {
+    SILENT=1 /etc/init.d/listener stop 4>&- 8>&- 9>&- || return 1
+    listener_wait=0
+    while /etc/init.d/listener status >/dev/null 2>&1; do
+        [ "$listener_wait" -lt 15 ] || return 1
+        sleep 1;listener_wait=$((listener_wait+1))
+    done
+}
+restore_listener_state() {
+    if [ -r "$BACKUP/listener_include" ] && [ -r /data/listener ] &&
+       ! grep -qxF "$LISTENER_LINE" /data/listener; then
+        awk -v line="$LISTENER_LINE" '
+            /^\. \/data\/kws_bootstrap\.sh[[:space:]]*$/ {print line;found++}
+            {print} END {if(found!=1)exit 1}' /data/listener > /data/listener.xiaoai.new || return 1
+        chmod 600 /data/listener.xiaoai.new
+        mv -f /data/listener.xiaoai.new /data/listener || return 1
+    fi
+    if [ -r "$BACKUP/listener_running" ]; then
+        SILENT=1 /etc/init.d/listener start 4>&- 8>&- 9>&- || return 1
+    fi
+}
+bridge_idle() {
+    [ -r "$RUNTIME/xiaoai_bridge.pid" ] && [ -r "$DEST/config.json" ] || return 0
+    read idle_pid < "$RUNTIME/xiaoai_bridge.pid" || return 1
+    case "$idle_pid" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$idle_pid" 2>/dev/null || return 0
+    idle_token=$(jq -er '.token' "$DEST/config.json") || return 1
+    idle_port=$(jq -r '.port // 8766' "$DEST/config.json")
+    idle_bind=$(jq -r '.bind // "0.0.0.0"' "$DEST/config.json")
+    [ "$idle_bind" != 0.0.0.0 ] || idle_bind=127.0.0.1
+    idle_state=$(curl -fsS --connect-timeout 1 --max-time 2 -H "Authorization: Bearer $idle_token" \
+        "http://$idle_bind:$idle_port/api/state" 2>/dev/null) || return 1
+    unset idle_token
+    printf '%s' "$idle_state" | jq -e '.audio_active==false and .voice.active==false' >/dev/null 2>&1
+}
+
 recover_snapshot() {
+    if [ -z "${BRIDGE_OAUTH_DIRECTORY:-}" ]; then
+        bridge_oauth_enter "$RUNTIME" 35 || return 1
+        bridge_lock_for 35 4 || return 1
+    fi
     voice_idle || return 1
     service stop || return 1
+    if /etc/init.d/listener status >/dev/null 2>&1; then stop_listener || return 1;fi
     restore_led || return 1
-    remove_listener_include || return 1
+    if [ ! -d "$BACKUP/bridge" ]; then remove_listener_include || return 1;fi
     capture_retry || return 1
     disable_adapter "$BACKUP/retry" || return 1
     restore_boot_cron || return 1
@@ -218,11 +259,19 @@ recover_snapshot() {
     [ ! -d "$DEST.previous" ] || retain "$DEST.previous" "$BACKUP/legacy_previous" || return 1
     if [ -d "$BACKUP/bridge" ];then
         cp -a "$BACKUP/bridge" "$STAGE" || return 1
-        disable_adapter "$STAGE" || return 1
         mv "$STAGE" "$DEST" || return 1
         service start || return 1
+        restore_listener_state || return 1
     fi
 }
+
+bridge_oauth_enter "$RUNTIME" "${XIAOAI_OAUTH_WAIT:-35}" || {
+    printf '%s\n' 'OAuth refresh is active; retry when its directory lock is released' >&2;exit 1;
+}
+trap 'bridge_oauth_leave' 0
+trap 'exit 143' HUP INT TERM
+exec 4> "$RUNTIME/xiaoai_bridge.config.lock"
+bridge_lock_for 35 4 || exit 1
 
 if [ "$MODE" = --rollback ];then
     [ -d "$BACKUP" ] || { printf '%s\n' 'No backup exists; use --uninstall to detach a partial installation';exit 1; }
@@ -250,6 +299,7 @@ if [ "$MODE" = --uninstall ];then
     finish_remove() {
         result=$?
         trap - 0 HUP INT TERM
+        bridge_oauth_leave || true
         if [ "$result" -ne 0 ] && [ -d "$BACKUP" ];then set_phase recovery_required;fi
         exit "$result"
     }
@@ -284,6 +334,17 @@ for dependency in amixer curl;do command -v "$dependency" >/dev/null 2>&1 || exi
 (cd "$PACKAGE" && sha256sum -c SHA256SUMS >/dev/null) || exit 1
 voice_idle || exit 1
 check_install_adapters || exit 1
+[ ! -e "$STAGE" ] && [ ! -e "$DEST.previous" ] || {
+    printf '%s\n' 'Unresolved staging/previous copy: inspect and recover before applying';exit 1;
+}
+need=$(du -sk "$PACKAGE" | awk '{print $1}')
+old=0;[ -d "$DEST" ] && old=$(du -sk "$DEST" | awk '{print $1}')
+available=$(df -k /data | awk 'NR==2{print $4}')
+# Full snapshot plus staged package and a second restoration copy after failure.
+[ "$available" -ge $((need+2*old+512)) ] || {
+    printf '%s\n' 'Insufficient /data space for upgrade and failure restoration' >&2;exit 1;
+}
+bridge_idle || { printf '%s\n' 'Bridge tasks are active or state is unavailable; retry when idle' >&2;exit 1; }
 OLD_BACKUP=''
 if [ -d "$BACKUP" ];then
     case "$(phase)" in
@@ -297,27 +358,13 @@ if [ -d "$BACKUP" ];then
     retain "$BACKUP" "$BACKUP.retained"
     OLD_BACKUP=$retained
 fi
-[ ! -e "$STAGE" ] && [ ! -e "$DEST.previous" ] || {
-    printf '%s\n' 'Unresolved staging/previous copy: inspect and recover before applying';exit 1;
-}
-need=$(du -sk "$PACKAGE" | awk '{print $1}')
-old=0;[ -d "$DEST" ] && old=$(du -sk "$DEST" | awk '{print $1}')
-available=$(df -k /data | awk 'NR==2{print $4}')
-[ "$available" -ge $((need+old+512)) ] || exit 1
-mkdir "$BACKUP"
-set_phase backup_incomplete
-[ ! -f "$BOOT" ] || cp -p "$BOOT" "$BACKUP/xiaoai_boot.sh"
-[ ! -f "$CRON" ] || cp -p "$CRON" "$BACKUP/crontab.root"
-[ ! -d "$DEST" ] || cp -a "$DEST" "$BACKUP/bridge"
-cp -p "$PACKAGE/xiaoai_boot.sh" "$BACKUP/installed_boot"
-: > "$BACKUP/ready"
-set_phase prepared
 APPLY_ACTIVE=false
 OLD_STOPPED=false
+LISTENER_STOPPED=false
 finish_apply() {
     result=$?
     trap - 0 HUP INT TERM
-    [ "$result" -ne 0 ] || exit 0
+    [ "$result" -ne 0 ] || { bridge_oauth_leave;exit 0; }
     set +e
     if [ "$APPLY_ACTIVE" = true ];then
         if recover_snapshot;then
@@ -331,21 +378,45 @@ finish_apply() {
         fi
     else
         [ ! -d "$STAGE" ] || retain "$STAGE" "$DEST.incomplete"
-        if [ "$OLD_STOPPED" = true ] && ! service start;then
+        listener_resume_ok=true
+        if [ "$LISTENER_STOPPED" = true ]; then
+            SILENT=1 /etc/init.d/listener start 4>&- 8>&- 9>&- || listener_resume_ok=false
+        fi
+        if { [ "$OLD_STOPPED" = true ] && ! service start; } || [ "$listener_resume_ok" = false ];then
             set_phase recovery_required
         else
             set_phase failed_restored
         fi
     fi
+    bridge_oauth_leave || true
     exit "$result"
 }
 trap finish_apply 0
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+mkdir "$BACKUP"
+set_phase backup_incomplete
+LISTENER_WAS_RUNNING=false
+if /etc/init.d/listener status >/dev/null 2>&1; then LISTENER_WAS_RUNNING=true;fi
+[ ! -d "$DEST" ] || { service stop;OLD_STOPPED=true; }
+if [ "$LISTENER_WAS_RUNNING" = true ]; then
+    LISTENER_STOPPED=true
+    stop_listener
+fi
+# No old Bridge/Listener writer is alive, and the existing OAuth Cron is excluded.
+[ ! -f "$BOOT" ] || cp -p "$BOOT" "$BACKUP/xiaoai_boot.sh"
+[ ! -f "$CRON" ] || cp -p "$CRON" "$BACKUP/crontab.root"
+[ ! -d "$DEST" ] || cp -a "$DEST" "$BACKUP/bridge"
+[ "$LISTENER_WAS_RUNNING" != true ] || : > "$BACKUP/listener_running"
+if [ -r /data/listener ] && grep -qxF "$LISTENER_LINE" /data/listener; then : > "$BACKUP/listener_include";fi
+cp -p "$PACKAGE/xiaoai_boot.sh" "$BACKUP/installed_boot"
+: > "$BACKUP/ready"
+set_phase prepared
 mkdir "$STAGE"
 cp -a "$PACKAGE/lib" "$PACKAGE/bin" "$PACKAGE/tools" "$STAGE/"
 cp -p "$PACKAGE/start.sh" "$PACKAGE/config.example.json" "$PACKAGE/SHA256SUMS" "$STAGE/"
+awk '$2!="install.sh" && $2!="xiaoai_boot.sh" {print}' "$PACKAGE/SHA256SUMS" > "$STAGE/INSTALLED_SHA256SUMS"
 if [ -d "$PACKAGE/adapter" ];then cp -a "$PACKAGE/adapter" "$STAGE/adapter"
 elif [ -d "$DEST/adapter" ];then cp -a "$DEST/adapter" "$STAGE/adapter"
 elif [ -n "$OLD_BACKUP" ] && [ -d "$OLD_BACKUP/retry/adapter" ];then cp -a "$OLD_BACKUP/retry/adapter" "$STAGE/adapter"
@@ -366,8 +437,6 @@ if [ -d "$STAGE/adapter" ];then
 elif jq -e '.enable_listener_adapter==true' "$STAGE/config.json" >/dev/null 2>&1;then
     bridge_adapter_reject 'Enabled Listener adapter is missing from the staged installation.';exit 1
 fi
-service stop
-OLD_STOPPED=true
 # Mark before the first directory move: power loss is recovered from the snapshot.
 set_phase replacing
 APPLY_ACTIVE=true
@@ -393,11 +462,15 @@ if ! service start;then
     printf 'Startup diagnostics: %s/xiaoai_bridge.log (and .log.1 if rotated)\n' "$RUNTIME" >&2
     exit 1
 fi
-# A running old listener has sourced old shell functions. Reload only an enabled
-# bridge adapter so the BusyBox lock fix also reaches that existing process.
-if jq -e '.enable_listener_adapter==true' "$DEST/config.json" >/dev/null 2>&1;then
+# Resume the previous microphone state; the new helper waits for initialization,
+# process identity and the versioned ready marker, rather than a mere PID.
+flock -u 4
+bridge_oauth_leave
+if [ "$LISTENER_WAS_RUNNING" = true ] || {
+    [ ! -d "$BACKUP/bridge" ] && jq -e '.enable_listener_adapter==true' "$DEST/config.json" >/dev/null 2>&1;
+}; then
     XIAOAI_BRIDGE_DIR="$DEST" XIAOAI_BRIDGE_RUNTIME="$RUNTIME" \
-    XIAOAI_BRIDGE_CONFIG="$DEST/config.json" "$DEST/lib/listener-service.sh" restart 8>&- 9>&-
+    XIAOAI_BRIDGE_CONFIG="$DEST/config.json" "$DEST/lib/listener-service.sh" start 4>&- 8>&- 9>&-
 fi
 set_phase installed
 printf '%s\n' 'Installed. Private identity/token retained; pair HA from local config.json.'

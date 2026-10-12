@@ -86,7 +86,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: synthetic-test-results
+          name: lx06-regression-test-results
           path: build/tests.xml
           retention-days: 7
 
@@ -118,6 +118,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq qemu-user
           qemu-arm build/armhf/xiaoai_bridge --version
+          python tools/qemu_smoke.py --binary build/armhf/xiaoai_bridge
       - name: Package checked LX06 EABI5 hard-float and HA assets
         run: |
           python -m tools.release package --binary build/armhf/xiaoai_bridge --output dist

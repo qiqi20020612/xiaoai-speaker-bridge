@@ -58,7 +58,7 @@ fi
     agent = tmp_path / "existing-eoai-agent.sh"
     shutil.copy(ROOT / "tests/synthetic_eoai_agent.sh", agent)
     auth = tmp_path / "existing-launcher.sh"
-    shutil.copy(ROOT / "tests/synthetic_auth_launcher.sh", auth)
+    shutil.copy(ROOT / "tests/fixtures/lx06_launcher.sh", auth)
     ha_http.state_dir = tmp_path
     script(tools / "ip", "#!/bin/sh\nprintf 'inet 192.0.2.42/24\\n'\n")
     if sys.platform == "darwin":
@@ -490,6 +490,7 @@ def test_voice_restore_keeps_new_master_and_does_not_link_other_channels(
 SAVED_VOL=60
 BRIDGE_BT_SAVED=50
 BRIDGE_VOICE_REVISION=1
+printf '%s' '{{"owner":0,"start":"","revision":1,"volumes":{{"master":60,"bluetooth":50}},"airplay_raw":"","airplay_active":"false"}}' > "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json"
 printf '%s\\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
 bridge_restore_volume
 """
@@ -838,8 +839,8 @@ bridge_feedback_end
         [*speaker_shell, "-c", body], env=env, capture_output=True, text=True, timeout=5
     )
     assert result.returncode == 0, result.stderr
-    assert (path / "processing-color").read_text().strip() == "17 9457664"
-    assert (path / "restored-color").read_text().strip() == "17 66051"
+    assert (path / "processing-color").read_text().strip() == "17 20624"
+    assert (path / "restored-color").read_text().strip() == "17 197121"
     assert led.read_text() == "sentinel"
     assert not (path / "xiaoai_bridge.feedback").exists()
 

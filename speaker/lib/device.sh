@@ -64,6 +64,11 @@ probe() {
         [ -w /sys/devices/i2c-0/0-003a/led_rgb ] || [ -w /sys/devices/i2c-0/0-0023/led_rgb ] && led=true
     fi
     flag '.verified.infrared' && [ -w /sys/ir_tx_gpio/ir_data ] && ir=true
+    announcement_ducking=false
+    flag '.verified.announcement_ducking' && announcement_ducking=true
+    recovery_pending=false
+    bridge_has_pending_recovery && recovery_pending=true
+    [ "$recovery_pending" = false ] || announcement_ducking=false
     uptime=$(cut -d. -f1 /proc/uptime)
     available=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
     total=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
@@ -88,12 +93,14 @@ probe() {
         --argjson ap_read "$ap_read" --argjson bt_read "$bt_read" --argjson ap_available "$ap_available" \
         --argjson listener "$listener" --argjson hook "$hook" --argjson can_tts "$can_tts" --argjson can_conversation "$can_conversation" \
         --argjson ap_write "$airplay_write" --argjson led "$led" --argjson ir "$ir" \
+        --argjson announcement_ducking "$announcement_ducking" \
+        --argjson recovery_pending "$recovery_pending" \
         --argjson uptime "$uptime" --argjson available "$available" --argjson total "$total" --argjson load "$load" --argjson rss "$rss" --argjson peak "$peak" \
         --argjson remaining "$remaining" --argjson led_state "$led_state" \
         '{capabilities:{volume:{master:$write_master,tts:$has_tts,bluetooth:$write_bt,headphone:$has_headphone,airplay:$ap_write},volume_read:{master:$has_master,tts:$has_tts,bluetooth:$has_bt,headphone:$has_headphone,airplay:$ap_read},
           playback:{airplay:{read:$ap_read,actions:$ap_actions},bluetooth:{read:$bt_read,actions:$bt_actions}},
-          announce:$can_tts,conversation:$can_conversation,voice_hooks:$hook,listener:true,led:$led,infrared:$ir},
-          state:{volumes:{master:$master,tts:$tts,bluetooth:$bt,headphone:$headphone,airplay:$ap_pct},
+          announce:$can_tts,conversation:$can_conversation,voice_hooks:$hook,listener:true,led:$led,infrared:$ir,announcement_ducking:$announcement_ducking},
+          state:{volume_recovery_pending:$recovery_pending,volumes:{master:$master,tts:$tts,bluetooth:$bt,headphone:$headphone,airplay:$ap_pct},
           airplay:{active:$ap_active,available:$ap_available,state:$ap_state,raw_volume:$ap_raw,volume:$ap_pct,muted:$ap_muted},
           bluetooth:{active:$bt_active,state:$bt_state,connected_name:$bt_name},listener:{running:$listener},
           system:{uptime:$uptime,memory_available:$available,memory_total:$total,cpu_load:$load,bridge_rss:$rss,bridge_peak_rss:$peak},
@@ -185,7 +192,7 @@ case "$1" in
         [ -w "$led" ] || led=/sys/devices/i2c-0/0-0023/led_rgb
         [ -w "$led" ] || fail unsupported_led
         printf '%s' "$REQUEST" | jq -e '(.on|type)=="boolean" and (if .on then (.rgb|type)=="array" and (.rgb|length)==3 and all(.rgb[];type=="number" and .>=0 and .<=255 and floor==.) and (.brightness|type)=="number" and .brightness>=0 and .brightness<=255 and (.brightness|floor)==.brightness else true end)' >/dev/null || fail invalid_led
-        color=$(printf '%s' "$REQUEST" | jq -r 'if .on then .brightness as $b | .rgb | map(. * $b / 255 | floor) | .[0]*65536+.[1]*256+.[2] else 0 end')
+        color=$(printf '%s' "$REQUEST" | jq -r 'if .on then .brightness as $b | .rgb | map(. * $b / 255 | floor) | .[2]*65536+.[1]*256+.[0] else 0 end')
         i=0;while [ "$i" -lt 18 ]; do printf '%s %s\n' "$i" "$color" > "$led" || fail hardware_control_failed;i=$((i+1));done
         printf '%s' "$REQUEST" | jq -c '{on:.on,rgb:.rgb,brightness:.brightness}' | atomic_json "$BRIDGE_RUNTIME/xiaoai_bridge.led.json"
         printf '{"completed":true}\n'

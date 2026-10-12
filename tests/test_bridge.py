@@ -1,3 +1,4 @@
+import fcntl
 import http.client
 import json
 import os
@@ -15,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture
-def native_bridge(tmp_path, socket_enabled):
+def native_bridge(tmp_path, socket_enabled, request):
     runtime = tempfile.TemporaryDirectory(
         prefix="xiaoai-test-", dir="/private/tmp" if os.path.isdir("/private/tmp") else "/tmp"
     )
@@ -25,6 +26,9 @@ def native_bridge(tmp_path, socket_enabled):
     binary.parent.mkdir()
     shutil.copy2(ROOT / "build/native/xiaoai_bridge", binary)
     adapter = ROOT / "tests/mock_adapter.py"
+    if getattr(request, "param", None):
+        adapter = tmp_path / "cleanup-adapter.py"
+        adapter.write_text(request.param)
     adapter.chmod(0o755)
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -96,6 +100,54 @@ def test_authentication_and_no_arbitrary_shell(native_bridge):
     assert call("/api/state", auth="wrong")[0] == 401
     assert call("/api/shell", {"request_id": "r1", "command": "touch /tmp/forbidden"})[0] == 404
     assert call("/api/volume", {"target": "master", "level": 30})[0] == 400
+
+
+def test_installation_lock_blocks_new_work_but_keeps_health_and_state_readable(native_bridge):
+    call, _, runtime, *_ = native_bridge
+    with (runtime / "xiaoai_bridge.install.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        assert call("/api/health")[0] == 200
+        assert call("/api/state")[0] == 200
+        status, result = call("/api/tts/announce", {"request_id": "during-install", "text": "test"})
+        assert status == 503 and result["error"] == "installation_in_progress"
+        assert call("/api/jobs/during-install")[0] == 404
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    assert call("/api/tts/announce", {"request_id": "after-install", "text": "test"})[0] == 202
+
+
+@pytest.mark.parametrize(
+    "native_bridge",
+    [
+        """#!/usr/bin/env python3
+import json,os,signal,sys,time
+from pathlib import Path
+json.load(sys.stdin)
+if sys.argv[1]=='probe':
+    print('{"capabilities":{"announce":true},"state":{}}')
+else:
+    def cleanup(*args):
+        time.sleep(6)
+        Path(os.environ['XIAOAI_BRIDGE_RUNTIME'],'cleanup-finished').touch()
+        sys.exit(0)
+    signal.signal(signal.SIGTERM,cleanup)
+    print('{"stage":"synthesizing"}',flush=True)
+    while True:time.sleep(0.05)
+"""
+    ],
+    indirect=True,
+)
+def test_cancel_allows_cleanup_longer_than_two_volume_lock_budgets(native_bridge):
+    call, _, runtime, *_ = native_bridge
+    assert call("/api/tts/announce", {"request_id": "slow-cleanup", "text": "test"})[0] == 202
+    deadline = time.monotonic() + 3
+    while call("/api/jobs/slow-cleanup")[1]["status"] != "synthesizing":
+        assert time.monotonic() < deadline
+        time.sleep(0.02)
+    assert call("/api/jobs/slow-cleanup/cancel", {})[1]["status"] == "cancelled"
+    deadline = time.monotonic() + 9
+    while not (runtime / "cleanup-finished").exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert (runtime / "cleanup-finished").exists()
 
 
 def test_source_policy_priority_roundtrip_and_invalid_permutations(native_bridge):

@@ -6,7 +6,6 @@ BOOT_FLAG=/tmp/xiaoai_boot.done
 LOCK=/tmp/xiaoai_boot.lock
 LOG=/tmp/xiaoai_boot.log
 BRIDGE_START=/data/xiaoai_bridge/start.sh
-[ -f "$BOOT_FLAG" ] && exit 0
 read UPTIME_SECONDS REST < /proc/uptime || exit 1
 UPTIME_SECONDS=${UPTIME_SECONDS%%.*}
 case "$UPTIME_SECONDS" in ''|*[!0-9]*) exit 1 ;; esac
@@ -16,9 +15,16 @@ case "$UPTIME_SECONDS" in ''|*[!0-9]*) exit 1 ;; esac
 command -v flock >/dev/null 2>&1 || exit 1
 exec 9> "$LOCK"
 flock -n 9 || exit 0
-[ -f "$BOOT_FLAG" ] && exit 0
 # Runtime logs are bounded, and live only in /tmp.
 if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 65536 ]; then mv -f "$LOG" "$LOG.1";fi
+if [ -f "$BOOT_FLAG" ]; then
+    # After boot, recover only the daemon. Respect an intentionally stopped
+    # microphone and never repeat the Squeezelite/audio boot sequence.
+    [ -x "$BRIDGE_START" ] || exit 0
+    "$BRIDGE_START" status 9>&- >/dev/null 2>&1 && exit 0
+    XIAOAI_SKIP_LISTENER_START=1 "$BRIDGE_START" start 9>&- >> "$LOG" 2>&1
+    exit $?
+fi
 printf 'XiaoAI boot tasks: %s\n' "$(date)" >> "$LOG"
 if pidof squeezelite >/dev/null 2>&1; then
     if ! /etc/init.d/squeezelite stop >> "$LOG" 2>&1; then

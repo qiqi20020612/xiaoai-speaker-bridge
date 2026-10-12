@@ -60,8 +60,10 @@ def register_services(hass):
                     and not caps.get("announce")
                 ):
                     raise BridgeError("tts_unavailable")
-                if coordinator.entry.options.get("announce_ducking") and (
-                    call.service == "announce" or payload.get("speak_response", True)
+                if (
+                    caps.get("announcement_ducking", False)
+                    and coordinator.entry.options.get("announce_ducking")
+                    and (call.service == "announce" or payload.get("speak_response", True))
                 ):
                     payload["duck_volume"] = coordinator.entry.options.get(
                         "announce_duck_volume", 10

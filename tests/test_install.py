@@ -21,20 +21,22 @@ def executable(path, text):
 
 def private_adapter(data, output, led=False):
     original = data / "porcupine_launcher_kws"
-    shutil.copy2(ROOT / "tests/synthetic_listener.sh", original)
+    shutil.copy2(ROOT / "tests/fixtures/lx06_launcher.sh", original)
+    guard = data / "kws_guard.sh"
+    shutil.copy2(ROOT / "tests/fixtures/lx06_kws_guard.sh", guard)
     command = [
         sys.executable,
         str(ROOT / "speaker/tools/prepare_adapters.py"),
         "--listener",
         str(original),
+        "--kws-guard",
+        str(guard),
         "--output",
         str(output),
     ]
     if led:
         original_led = data / "airplay_volume_led"
-        original_led.write_text(
-            '#!/bin/sh\ndraw() {\n    :\n}\n    while [ -f "$STATE" ]; do\n        draw\n        break\n    done\n/data/airplay_volume_led --worker\n'
-        )
+        shutil.copy2(ROOT / "tests/fixtures/lx06_airplay_led.sh", original_led)
         command.extend(["--airplay-led", str(original_led)])
     subprocess.run(
         command,
@@ -92,6 +94,8 @@ fi""",
         if f.is_file() and f.name != "config.json"
     ]
     (package / "SHA256SUMS").write_text("\n".join(hashes) + "\n")
+    listener_service = tmp_path / "listener-service"
+    executable(listener_service, '[ "$1" != status ]')
     source = (
         (ROOT / "speaker/install.sh")
         .read_text()
@@ -100,6 +104,7 @@ fi""",
         .replace("df -k /data", f"df -k '{data}'")
         .replace("RUNTIME=/tmp", f"RUNTIME={runtime}")
         .replace("/etc/init.d/cron", str(cron))
+        .replace("/etc/init.d/listener", str(listener_service))
     )
     installer = package / "install.sh"
     installer.write_text(source)
@@ -125,7 +130,7 @@ fi""",
             env=env,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=15,
         )
 
     return call, data, cron_file, original_cron, original_boot, calls
@@ -179,6 +184,7 @@ def test_activation_changes_only_one_include_and_keeps_refreshed_values(
         executable(tools / "sha256sum", 'exec shasum -a 256 "$@"')
     shutil.copy2(ROOT / "speaker/lib/common.sh", bridge / "lib/common.sh")
     shutil.copy2(ROOT / "speaker/lib/locks.sh", bridge / "lib/locks.sh")
+    shutil.copy2(ROOT / "speaker/lib/volume-recovery.sh", bridge / "lib/volume-recovery.sh")
     shutil.copy2(ROOT / "speaker/lib/adapter-check.sh", bridge / "lib/adapter-check.sh")
     executable(bridge / "lib/listener-service.sh", ":")
     private_adapter(data, bridge / "adapter")
@@ -460,9 +466,9 @@ def test_only_enabled_adapter_is_reloaded_to_receive_fixed_shell_functions(insta
         )
     result = call("--apply")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert calls.read_text().count("listener-restart") == 1
+    assert calls.read_text().count("listener-start") == 1
     assert call("--apply").returncode == 0
-    assert calls.read_text().count("listener-restart") == 1
+    assert calls.read_text().count("listener-start") == 1
 
 
 @pytest.mark.parametrize("location", ["package", "installed", "retry"])
@@ -537,7 +543,7 @@ def test_upgrade_reuses_compatible_adapter_or_explicit_reviewed_replacement(inst
     private_adapter(data, data.parent / "package/adapter")
     # Even an identical public package must apply a newly reviewed private replacement.
     assert call("--apply").returncode == 0
-    assert json.loads((old / "adapter/review.json").read_text())["format"] == 2
+    assert json.loads((old / "adapter/review.json").read_text())["format"] == 3
     assert json.loads((old / "config.json").read_text())["token"] == "synthetic-stable"
 
 
@@ -605,3 +611,142 @@ def test_airplay_led_review_and_active_guard_are_verified_before_upgrade(install
         assert call("--dry-run").returncode == 0
         assert call("--apply").returncode == 0
         assert call("--apply").returncode == 0
+
+
+def test_enabled_v013_snapshot_is_restored_after_new_listener_readiness_failure(installation):
+    call, data, cron, original_cron, original_boot, calls = installation
+    old = data / "xiaoai_bridge"
+    (old / "bin").mkdir(parents=True)
+    (old / "adapter").mkdir()
+    binary = b"exact-installed-v013-binary-snapshot"
+    (old / "bin/xiaoai_bridge").write_bytes(binary)
+    config = {
+        "device_id": "synthetic-stable",
+        "token": "synthetic-stable-token",
+        "enable_listener_adapter": True,
+        "verified": {"airplay_volume": False},
+    }
+    (old / "config.json").write_text(json.dumps(config))
+    (old / "adapter/listener.sh").write_text("#!/bin/sh\n# private format-1 listener\n")
+    (old / "adapter/review.json").write_text('{"format":1}')
+    original_adapter = {p.name: p.read_bytes() for p in (old / "adapter").iterdir()}
+    listener = data / "listener"
+    original_listener = f'HA_TOKEN="synthetic-current"\nHA_REFRESH_TOKEN="synthetic-rotated"\n. {old}/lib/bootstrap.sh\n. /data/kws_bootstrap.sh\n'
+    listener.write_text(original_listener)
+    kws = data / "kws_bootstrap.sh"
+    kws.write_text("#!/bin/sh\n# Existing KWS include remains verbatim\n")
+    package = data.parent / "package"
+    private_adapter(data, package / "adapter")
+    service = data.parent / "listener-service"
+    running = data.parent / "listener-running"
+    running.touch()
+    executable(
+        service,
+        f"""case "$1" in
+ status) [ -f '{running}' ] ;;
+ stop) rm -f '{running}'; printf 'listener-stop\\n' >> "$INSTALL_CALLS" ;;
+ start) touch '{running}'; printf 'listener-old-start\\n' >> "$INSTALL_CALLS" ;;
+esac""",
+    )
+    helper = package / "lib/listener-service.sh"
+    executable(
+        helper, f'touch "{running}"\nprintf \'listener-not-ready\\n\' >> "$INSTALL_CALLS"\nexit 1'
+    )
+    with (package / "SHA256SUMS").open("a") as stream:
+        stream.write(
+            hashlib.sha256(helper.read_bytes()).hexdigest() + "  lib/listener-service.sh\n"
+        )
+    result = call("--apply")
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert (old / "bin/xiaoai_bridge").read_bytes() == binary
+    assert json.loads((old / "config.json").read_text()) == config
+    assert {p.name: p.read_bytes() for p in (old / "adapter").iterdir()} == original_adapter
+    assert listener.read_text() == original_listener
+    assert kws.read_text().endswith("verbatim\n")
+    assert running.exists()
+    assert (data / "xiaoai_boot.sh").read_text() == original_boot
+    assert cron.read_text() == original_cron
+    assert (data / "xiaoai_bridge.backup/status").read_text().strip() == "failed_restored"
+    assert calls.read_text().count("listener-stop") == 2
+    assert calls.read_text().count("listener-old-start") == 1
+    assert call("--rollback").returncode == 0
+    assert json.loads((old / "config.json").read_text())["enable_listener_adapter"]
+
+
+def test_existing_oauth_directory_blocks_install_without_breaking_owner(installation):
+    call, data, cron, original_cron, original_boot, calls = installation
+    installer = data.parent / "package/install.sh"
+    installer.write_text(
+        installer.read_text().replace("${XIAOAI_OAUTH_WAIT:-35}", "${XIAOAI_OAUTH_WAIT:-0}")
+    )
+    lock = data.parent / "runtime/ha_oauth_refresh.lock"
+    lock.mkdir()
+    (lock / "existing-writer").write_text("original-oauth-cron")
+    result = call("--apply")
+    assert result.returncode != 0 and "OAuth refresh is active" in result.stderr
+    assert (lock / "existing-writer").read_text() == "original-oauth-cron"
+    assert not (data / "xiaoai_bridge.backup").exists() and not calls.exists()
+    assert cron.read_text() == original_cron
+
+
+def test_storage_preflight_does_not_retain_or_replace_existing_backup(installation):
+    call, data, cron, original_cron, original_boot, calls = installation
+    backup = data / "xiaoai_bridge.backup"
+    backup.mkdir()
+    (backup / "status").write_text("installed\n")
+    executable(
+        data.parent / "tools/df",
+        "printf 'Filesystem blocks used available mount\\nsynthetic 30000 29999 1 local\\n'",
+    )
+    result = call("--apply")
+    assert result.returncode != 0 and "Insufficient /data space" in result.stderr
+    assert (backup / "status").read_text() == "installed\n"
+    assert not (data / "xiaoai_bridge.backup.retained").exists()
+    assert not calls.exists() and cron.read_text() == original_cron
+
+
+def test_snapshot_copy_failure_resumes_old_bridge_and_listener(installation):
+    call, data, cron, original_cron, original_boot, calls = installation
+    old = data / "xiaoai_bridge"
+    old.mkdir()
+    (old / "config.json").write_text('{"enable_listener_adapter":false,"token":"synthetic"}')
+    (old / "original-binary").write_text("v013")
+    running = data.parent / "listener-running"
+    running.touch()
+    executable(
+        data.parent / "listener-service",
+        f"""case "$1" in
+ status) [ -f '{running}' ] ;;
+ stop) rm -f '{running}' ;;
+ start) touch '{running}' ;;
+esac""",
+    )
+    real_cp = shutil.which("cp")
+    executable(
+        data.parent / "tools/cp",
+        f'''case "$*" in
+ *xiaoai_bridge.backup/bridge*) exit 1 ;;
+esac
+exec '{real_cp}' "$@"''',
+    )
+    result = call("--apply")
+    assert result.returncode != 0
+    assert (old / "original-binary").read_text() == "v013" and running.exists()
+    assert calls.read_text().splitlines() == ["stop", "start"]
+    assert (data / "xiaoai_bridge.backup/status").read_text().strip() == "failed_restored"
+    assert not (data.parent / "runtime/ha_oauth_refresh.lock").exists()
+
+
+def test_active_bridge_task_blocks_upgrade_before_services_stop(installation):
+    call, data, cron, original_cron, original_boot, calls = installation
+    old = data / "xiaoai_bridge"
+    old.mkdir()
+    (old / "config.json").write_text('{"enable_listener_adapter":false,"token":"synthetic"}')
+    (data.parent / "runtime/xiaoai_bridge.pid").write_text(str(os.getpid()))
+    executable(
+        data.parent / "tools/curl",
+        'printf \'%s\' \'{"audio_active":true,"voice":{"active":false}}\'',
+    )
+    result = call("--apply")
+    assert result.returncode != 0 and "Bridge tasks are active" in result.stderr
+    assert not calls.exists() and not (data / "xiaoai_bridge.backup").exists()

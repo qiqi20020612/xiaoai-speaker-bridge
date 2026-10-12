@@ -24,7 +24,7 @@ if flag '.enable_listener_adapter'; then
     if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" ]; then
         read owner < "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" || owner=0
         case "$owner" in ''|*[!0-9]*) owner=0 ;; esac
-        [ "$owner" -gt 1 ] && kill -0 "$owner" 2>/dev/null && exit 0
+        hooks_ready && exit 0
     fi
     if /etc/init.d/listener status >/dev/null 2>&1; then
         SILENT=1 /etc/init.d/listener stop || exit 1
@@ -36,7 +36,10 @@ else
     SILENT=1 /etc/init.d/listener start || exit 1
 fi
 count=0
-while ! /etc/init.d/listener status >/dev/null 2>&1; do
-    [ "$count" -lt 10 ] || exit 1
+while :; do
+    if /etc/init.d/listener status >/dev/null 2>&1; then
+        if ! flag '.enable_listener_adapter' || hooks_ready; then exit 0;fi
+    fi
+    [ "$count" -lt "${XIAOAI_LISTENER_WAIT:-90}" ] || exit 1
     sleep 1;count=$((count+1))
 done
