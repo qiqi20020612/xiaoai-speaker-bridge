@@ -70,8 +70,9 @@ static char instance_id[64];
 static double rate_tokens = 40, rate_at = 0;
 static int listening = -1, local_socket = -1, voice_active = 0;
 static pid_t voice_pid = 0;
-static char voice_source[32] = "", policy_source[32] = "";
+static char voice_source[32] = "", policy_source[32] = "", voice_observations[256] = "{}";
 static char voice_sources[128] = "[]";
+static char policy_priority[128] = "[\"airplay\",\"bluetooth\",\"mpd\"]";
 static char voice_volumes[256] = "{}";
 static int voice_uncertain = 1, policy_uncertain = 1;
 static double next_probe = 0, policy_at = 0, last_airplay_check = 0;
@@ -471,15 +472,16 @@ static int cap_bool(const char *key) {
     return json_bool(&d, json_get(&d, 0, key), 0);
 }
 static void save_snapshot(void) {
-    char raw[256], q[80];
+    char raw[512], q[80];
     json_quote(policy_source, q, sizeof q);
-    snprintf(raw, sizeof raw, "{\"source\":%s,\"uncertain\":%s,\"updated\":%ld}",
-             policy_source[0] ? q : "null", policy_uncertain ? "true" : "false", (long)time(NULL));
+    snprintf(raw, sizeof raw, "{\"source\":%s,\"uncertain\":%s,\"updated\":%ld,\"priority\":%s}",
+             policy_source[0] ? q : "null", policy_uncertain ? "true" : "false", (long)time(NULL),
+             policy_priority);
     write_file("xiaoai_bridge.source.json", raw);
 }
 static void state_json(char *out, size_t cap) {
     size_t n = strlen(cached_state);
-    char voice[800], source[80];
+    char voice[1100], source[80];
     json_quote(voice_source, source, sizeof source);
     int audio = 0;
     for (int k = 0; k < WORKERS; k++)
@@ -487,9 +489,9 @@ static void state_json(char *out, size_t cap) {
             audio = 1;
     snprintf(voice, sizeof voice,
              "\"voice\":{\"active\":%s,\"source\":%s,\"active_sources\":%s,"
-             "\"volumes\":%s,\"uncertain\":%s}",
+             "\"volumes\":%s,\"uncertain\":%s,\"observed_sources\":%s}",
              voice_active ? "true" : "false", voice_source[0] ? source : "null", voice_sources,
-             voice_volumes, voice_uncertain ? "true" : "false");
+             voice_volumes, voice_uncertain ? "true" : "false", voice_observations);
     snprintf(out, cap,
              "{%.*s%s%s,\"audio_active\":%s,\"capabilities\":%s,\"updated\":%ld,"
              "\"state_stale\":%s,\"worker_peak_rss_kb\":%ld,\"instance_id\":\"%s\",\"device_id\":"
@@ -587,6 +589,32 @@ static void dispatch(int i, char *method, char *path, char *body) {
             strcmp(value, "bluetooth")) {
             error(i, 400, "invalid_source");
             return;
+        }
+        int priority = json_get(&d, 0, "priority");
+        if (priority >= 0) {
+            int mask = 0;
+            char candidate[sizeof policy_priority];
+            if (d.t[priority].type != J_ARRAY || d.t[priority].count != 3 ||
+                json_copy(&d, priority, candidate, sizeof candidate) < 0) {
+                error(i, 400, "invalid_source_priority");
+                return;
+            }
+            for (int node = priority + 1, n = 0; n < 3; n++, node = d.t[node].next) {
+                char name[32];
+                if (json_string(&d, node, name, sizeof name) >= 0) {
+                    if (strcmp(name, "airplay") == 0)
+                        mask |= 1;
+                    else if (strcmp(name, "bluetooth") == 0)
+                        mask |= 2;
+                    else if (strcmp(name, "mpd") == 0)
+                        mask |= 4;
+                }
+            }
+            if (mask != 7) {
+                error(i, 400, "invalid_source_priority");
+                return;
+            }
+            strcpy(policy_priority, candidate);
         }
         strcpy(policy_source, value);
         policy_uncertain = json_bool(&d, json_get(&d, 0, "uncertain"), 1);
@@ -1000,6 +1028,9 @@ static void read_local(void) {
         if (json_copy(&d, json_get(&d, 0, "volumes"), voice_volumes, sizeof voice_volumes) < 0)
             strcpy(voice_volumes, "{}");
         voice_uncertain = json_bool(&d, json_get(&d, 0, "uncertain"), 1);
+        if (json_copy(&d, json_get(&d, 0, "observed_sources"), voice_observations,
+                      sizeof voice_observations) < 0)
+            strcpy(voice_observations, "{}");
         double pid;
         if (json_number(&d, json_get(&d, 0, "pid"), &pid) == 0 && pid > 1)
             voice_pid = (pid_t)pid;
@@ -1009,6 +1040,7 @@ static void read_local(void) {
         voice_source[0] = 0;
         strcpy(voice_sources, "[]");
         strcpy(voice_volumes, "{}");
+        strcpy(voice_observations, "{}");
     }
     ++sequence;
     next_probe = 0;

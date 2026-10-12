@@ -140,6 +140,7 @@ class XiaoAICoordinator(DataUpdateCoordinator):
                     "source": decision.source,
                     "uncertain": decision.uncertain,
                     "idle_policy": self.volume.idle_policy,
+                    "priority": list(priority),
                 },
             )
         except BridgeError:

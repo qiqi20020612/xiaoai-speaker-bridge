@@ -166,3 +166,17 @@ async def test_ducking_options_are_applied_only_to_speaking_jobs(hass, mock_clie
         )
         assert "duck_volume" not in submit.call_args.args[1]
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_pause_refresh_clears_active_airplay_source(hass, mock_clients):
+    entry, c = await setup(hass)
+    assert c.data["active_source"] == "airplay"
+    with patch.object(
+        c.client,
+        "state",
+        AsyncMock(return_value={**STATE, "airplay": {"active": False, "state": "Stopped"}}),
+    ):
+        await c.async_refresh()
+    assert c.data["active_source"] is None
+    assert hass.states.get("media_player.synthetic_speaker").state == "idle"
+    assert await hass.config_entries.async_unload(entry.entry_id)

@@ -51,6 +51,70 @@ def test_conflicting_sources_use_configured_priority_and_flag_uncertainty():
 
 
 @pytest.mark.parametrize(
+    "state,priority,source,uncertain",
+    [
+        (
+            {
+                "airplay": {"active": True, "state": "Playing"},
+                "bluetooth": {"active": False, "state": "unknown"},
+                "mpd": {"state": "unknown"},
+            },
+            ["airplay", "bluetooth", "mpd"],
+            "airplay",
+            False,
+        ),
+        (
+            {"airplay": {"state": "unknown"}, "mpd": {"state": "play"}},
+            ["airplay", "bluetooth", "mpd"],
+            "mpd",
+            True,
+        ),
+        (
+            {
+                "airplay": {"active": False, "state": "Playing"},
+                "bluetooth": {"active": False, "state": "unknown"},
+                "mpd": {"state": "stop"},
+            },
+            ["airplay", "bluetooth", "mpd"],
+            None,
+            False,
+        ),
+        (
+            {"state_stale": True, "airplay": {"active": True}},
+            ["airplay", "bluetooth", "mpd"],
+            "airplay",
+            True,
+        ),
+        (
+            {"airplay": {"active": True}, "mpd": {"state": "play"}},
+            ["mpd", "airplay", "bluetooth"],
+            "mpd",
+            True,
+        ),
+        ({}, ["airplay", "bluetooth", "mpd"], None, True),
+    ],
+)
+def test_source_confidence_refers_to_selected_source(state, priority, source, uncertain):
+    result = choose_source(state, priority)
+    assert (result.source, result.uncertain) == (source, uncertain)
+
+
+def test_voice_confidence_uses_frozen_observations_and_configured_priority():
+    state = {
+        "voice": {
+            "active": True,
+            "source": "airplay",
+            "uncertain": True,
+            "observed_sources": {"airplay": True, "bluetooth": None, "mpd": False},
+        },
+        "mpd": {"state": "play"},
+    }
+    assert choose_source(state).source == "airplay"
+    assert not choose_source(state).uncertain
+    assert choose_source(state, ["bluetooth", "airplay", "mpd"]).uncertain
+
+
+@pytest.mark.parametrize(
     "text,expected",
     [
         ("把音量调到百分之三十", {"target": "auto", "level": 30}),

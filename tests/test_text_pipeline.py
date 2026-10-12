@@ -628,7 +628,7 @@ esac
     assert snapshot["source"] == (
         "mpd" if "mpd" in sources else sources[0] if len(sources) == 1 else None
     )
-    assert snapshot["uncertain"] == (mpd == "unknown" or len(sources) > 1)
+    assert snapshot["uncertain"] == ((not sources and mpd == "unknown") or len(sources) > 1)
     assert snapshot["volumes"] == {"master": 60, "bluetooth": 50}
     assert snapshot["pid"] == 42
     assert (path / "jq-count").read_text() == "x"
@@ -665,74 +665,6 @@ bridge_restore_volume
     profile = (path / "xiaoai_bridge.profile").read_text()
     assert "phase=wake_led" in profile and "phase=recording_ready" in profile
     assert "synthetic-token" not in profile
-
-
-def test_multiline_request_remains_literal_and_profile_has_no_text(text_device):
-    call, path, env = text_device
-    text = "line one\nline two with $(no_command) and `no_command`"
-    pipeline = path / "bridge/lib/text.sh"
-    result = subprocess.run(
-        ["sh", str(pipeline), "announce", json.dumps({"text": text})],
-        env={**env, "XIAOAI_PROFILE": "1"},
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
-    assert result.returncode == 0, result.stderr
-    assert (path / "tts-calls").read_text().strip() == text
-    trace = (path / "xiaoai_bridge.profile").read_text()
-    assert "phase=task_parsed" in trace and "phase=tts_launch" in trace
-    assert "line one" not in trace and "synthetic-token" not in trace
-
-
-def test_feedback_yields_to_voice_and_restores_prior_manual_led(text_device, speaker_shell):
-    _, path, env = text_device
-    led = path / "led_rgb"
-    led.write_text("")
-    feedback = path / "bridge/lib/task-feedback.sh"
-    feedback.write_text(feedback.read_text().replace("/sys/devices/i2c-0/0-003a/led_rgb", str(led)))
-    (path / "xiaoai_bridge.led.json").write_text('{"on":true,"rgb":[1,2,3],"brightness":255}')
-    body = f'''. "{path / "bridge/lib/common.sh"}"
-. "{feedback}"
-MODE=send_text
-TASK_LED_VERIFIED=true
-bridge_feedback_setup
-bridge_feedback_stage processing
-bridge_led_busy || exit 78
-cp "{led}" "$STATE_DIR/processing-color"
-bridge_feedback_end
-cp "{led}" "$STATE_DIR/restored-color"
-bridge_feedback_stage synthesizing
-printf '%s\\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
-printf sentinel > "{led}"
-bridge_feedback_stage playing
-bridge_feedback_end
-'''
-    result = subprocess.run(
-        [*speaker_shell, "-c", body], env=env, capture_output=True, text=True, timeout=5
-    )
-    assert result.returncode == 0, result.stderr
-    assert (path / "processing-color").read_text().strip() == "17 9457664"
-    assert (path / "restored-color").read_text().strip() == "17 66051"
-    assert led.read_text() == "sentinel"
-    assert not (path / "xiaoai_bridge.feedback").exists()
-
-
-def test_silent_remote_text_has_processing_but_no_speech_phases(text_device):
-    call, path, env = text_device
-    led = path / "led_rgb"
-    led.write_text("")
-    feedback = path / "bridge/lib/task-feedback.sh"
-    feedback.write_text(feedback.read_text().replace("/sys/devices/i2c-0/0-003a/led_rgb", str(led)))
-    config = path / "config.json"
-    values = json.loads(config.read_text())
-    values["verified"] = {"led": True}
-    config.write_text(json.dumps(values))
-    result, _ = call("send_text", "test", speak_response=False)
-    assert result.returncode == 0
-    assert "synthesizing" not in result.stdout and "playing" not in result.stdout
-    assert led.read_text().strip() == "17 0"
-    assert not (path / "xiaoai_bridge.feedback").exists()
 
 
 def enable_airplay_duck_fixture(path):
@@ -877,3 +809,71 @@ bridge_restore_volume
         "bluetooth 60%",
     ]
     assert not (path / "xiaoai_bridge.duck.json").exists()
+
+
+def test_feedback_yields_to_voice_and_restores_prior_manual_led(text_device, speaker_shell):
+    _, path, env = text_device
+    led = path / "led_rgb"
+    led.write_text("")
+    feedback = path / "bridge/lib/task-feedback.sh"
+    feedback.write_text(feedback.read_text().replace("/sys/devices/i2c-0/0-003a/led_rgb", str(led)))
+    (path / "xiaoai_bridge.led.json").write_text('{"on":true,"rgb":[1,2,3],"brightness":255}')
+    body = f'''. "{path / "bridge/lib/common.sh"}"
+. "{feedback}"
+MODE=send_text
+TASK_LED_VERIFIED=true
+bridge_feedback_setup
+bridge_feedback_stage processing
+bridge_led_busy || exit 78
+cp "{led}" "$STATE_DIR/processing-color"
+bridge_feedback_end
+cp "{led}" "$STATE_DIR/restored-color"
+bridge_feedback_stage synthesizing
+printf '%s\\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
+printf sentinel > "{led}"
+bridge_feedback_stage playing
+bridge_feedback_end
+'''
+    result = subprocess.run(
+        [*speaker_shell, "-c", body], env=env, capture_output=True, text=True, timeout=5
+    )
+    assert result.returncode == 0, result.stderr
+    assert (path / "processing-color").read_text().strip() == "17 9457664"
+    assert (path / "restored-color").read_text().strip() == "17 66051"
+    assert led.read_text() == "sentinel"
+    assert not (path / "xiaoai_bridge.feedback").exists()
+
+
+def test_silent_remote_text_has_processing_but_no_speech_phases(text_device):
+    call, path, env = text_device
+    led = path / "led_rgb"
+    led.write_text("")
+    feedback = path / "bridge/lib/task-feedback.sh"
+    feedback.write_text(feedback.read_text().replace("/sys/devices/i2c-0/0-003a/led_rgb", str(led)))
+    config = path / "config.json"
+    values = json.loads(config.read_text())
+    values["verified"] = {"led": True}
+    config.write_text(json.dumps(values))
+    result, _ = call("send_text", "test", speak_response=False)
+    assert result.returncode == 0
+    assert "synthesizing" not in result.stdout and "playing" not in result.stdout
+    assert led.read_text().strip() == "17 0"
+    assert not (path / "xiaoai_bridge.feedback").exists()
+
+
+def test_multiline_request_remains_literal_and_profile_has_no_text(text_device):
+    call, path, env = text_device
+    text = "line one\nline two with $(no_command) and `no_command`"
+    pipeline = path / "bridge/lib/text.sh"
+    result = subprocess.run(
+        ["sh", str(pipeline), "announce", json.dumps({"text": text})],
+        env={**env, "XIAOAI_PROFILE": "1"},
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (path / "tts-calls").read_text().strip() == text
+    trace = (path / "xiaoai_bridge.profile").read_text()
+    assert "phase=task_parsed" in trace and "phase=tts_launch" in trace
+    assert "line one" not in trace and "synthetic-token" not in trace
