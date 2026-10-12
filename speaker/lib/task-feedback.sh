@@ -24,12 +24,12 @@ bridge_feedback_stage() {
     if voice_busy || { feedback_busy && [ "${feedback_owner:-}" != "$$" ]; }; then
         flock -u 6;return 0
     fi
-    printf '%s\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.feedback"
+    bridge_mark_owner "$BRIDGE_RUNTIME/xiaoai_bridge.feedback"
     BRIDGE_FEEDBACK_OWNED=true
     case "$1" in
-        processing) color=9457664 ;; # Amber: work that may produce no speech.
-        synthesizing) color=5243008 ;; # Purple: requested speech is being prepared.
-        playing) color=32896 ;; # Blue: miplay observed under this TTS process.
+        processing) color=20624 ;; # Amber: work that may produce no speech.
+        synthesizing) color=8388688 ;; # Purple: requested speech is being prepared.
+        playing) color=8421376 ;; # Blue: miplay observed under this TTS process.
         *) flock -u 6;return 0 ;;
     esac
     bridge_feedback_color "$color" || true
@@ -39,13 +39,13 @@ bridge_feedback_end() {
     [ "$BRIDGE_FEEDBACK_OWNED" = true ] || return 0
     exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
     bridge_lock_for 0 6 || return 0
-    owner='';[ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" ] || read owner < "$BRIDGE_RUNTIME/xiaoai_bridge.feedback"
+    owner='';[ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" ] || read owner owner_start < "$BRIDGE_RUNTIME/xiaoai_bridge.feedback"
     if [ "$owner" != "$$" ]; then flock -u 6;return 0;fi
     rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.feedback"
     if ! voice_busy; then
         color=0
         if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.led.json" ]; then
-            color=$(jq -r 'if .on then .brightness as $b | .rgb | map(. * $b / 255 | floor) | .[0]*65536+.[1]*256+.[2] else 0 end' "$BRIDGE_RUNTIME/xiaoai_bridge.led.json" 2>/dev/null || printf 0)
+            color=$(jq -r 'if .on then .brightness as $b | .rgb | map(. * $b / 255 | floor) | .[2]*65536+.[1]*256+.[0] else 0 end' "$BRIDGE_RUNTIME/xiaoai_bridge.led.json" 2>/dev/null || printf 0)
         fi
         bridge_feedback_color "$color" || true
     fi

@@ -181,6 +181,7 @@ async def test_native_text_privacy_is_explicit_and_recorder_filter_excludes_stat
 
 async def test_ducking_options_are_applied_only_to_speaking_jobs(hass, mock_clients):
     entry, c = await setup(hass, {"announce_ducking": True, "announce_duck_volume": 10})
+    c.info["capabilities"] = {**c.info["capabilities"], "announcement_ducking": True}
     with patch.object(c.jobs, "submit", wraps=c.jobs.submit) as submit:
         await hass.services.async_call(
             DOMAIN,
@@ -214,4 +215,22 @@ async def test_pause_refresh_clears_active_airplay_source(hass, mock_clients):
         await c.async_refresh()
     assert c.data["active_source"] is None
     assert hass.states.get("media_player.synthetic_speaker").state == "idle"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_v013_protocol_without_duck_capability_keeps_existing_announce_working(
+    hass, mock_clients
+):
+    entry, c = await setup(hass, {"announce_ducking": True, "announce_duck_volume": 10})
+    c.info["capabilities"] = {
+        k: v for k, v in c.info["capabilities"].items() if k != "announcement_ducking"
+    }
+    with patch.object(c.jobs, "submit", wraps=c.jobs.submit) as submit:
+        await hass.services.async_call(
+            DOMAIN,
+            "announce",
+            {"entity_id": "media_player.synthetic_speaker", "text": "test"},
+            blocking=True,
+        )
+        assert "duck_volume" not in submit.call_args.args[1]
     assert await hass.config_entries.async_unload(entry.entry_id)

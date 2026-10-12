@@ -28,7 +28,13 @@ fi
 exec 9> /tmp/xiaoai_bridge.airplay-led.lock
 flock -n 9 || exit 1
 . "$DIR/lib/common.sh"
-voice_busy && { printf '%s\n' 'Voice is active; retry when idle';exit 1; }
+exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
+bridge_lock_for 0 6 || exit 1
+bridge_led_busy && { printf '%s\n' 'LED ownership is active; retry when idle';exit 1; }
+if [ -d "$BRIDGE_RUNTIME/airplay_led.lock" ] || [ -f "$BRIDGE_RUNTIME/airplay_led.state" ]; then
+    printf '%s\n' 'Wait for the existing AirPlay LED worker/state to finish before changing its program' >&2
+    exit 1
+fi
 current=$(hash "$ORIGINAL")
 if [ "$MODE" = --remove ];then
     [ -r "$BACKUP" ] || exit 0

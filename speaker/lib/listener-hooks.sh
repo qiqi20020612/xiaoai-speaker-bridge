@@ -2,11 +2,24 @@
 # Sourced AFTER the original launcher's function definitions, in a generated sibling.
 # The original launcher, listener config, Agent, KWS and TTS files remain intact.
 . "${XIAOAI_BRIDGE_DIR:-/data/xiaoai_bridge}/lib/common.sh"
-printf '%s\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready"
+# Readiness is published by the generated launcher after model/date/STT setup.
+bridge_listener_initialized() {
+    bridge_listener_pid "$$" "$(bridge_pid_start "$$" 2>/dev/null || true)" || return 1
+    bridge_recover_pending || return 1
+    BRIDGE_LISTENER_INITIALIZED=1
+    trap 'bridge_voice_exit' HUP INT TERM
+    trap 'bridge_voice_cleanup' 0
+}
+bridge_listener_ready() {
+    [ "${BRIDGE_LISTENER_INITIALIZED:-0}" = 1 ] || return 1
+    bridge_owner_alive "${KWS_GUARD_CHILD:-0}" || return 1
+    printf '%s %s 3\n' "$$" "$(bridge_pid_start "$$" 2>/dev/null || true)" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready"
+}
 
 bridge_voice_begin() {
+    if ! voice_busy || [ "${voice_owner:-0}" != "$$" ]; then bridge_recover_pending || return 1;fi
     BRIDGE_VOICE_VOLUME_SAVED=false
-    printf '%s\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
+    bridge_mark_owner "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
     trap 'bridge_voice_exit' HUP INT TERM
     bridge_profile wake
     exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
@@ -21,17 +34,27 @@ bridge_voice_begin() {
     bridge_lock_for 3 7 || { bridge_voice_release; return 1; }
     rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.led.json"
     BRIDGE_VOICE_REVISION=0
+    BRIDGE_DUCK_TRANSFER=false
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] && \
         BRIDGE_VOICE_REVISION=$(jq -r '.revision // 0' "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
     BRIDGE_BT_SAVED=$(percent bluetooth)
     BRIDGE_MASTER_SAVED=$(percent mysoftvol)
+    BRIDGE_HARDWARE_MASTER=$BRIDGE_MASTER_SAVED
+    [ -n "$BRIDGE_MASTER_SAVED" ] && [ -n "$BRIDGE_BT_SAVED" ] || { flock -u 7;bridge_voice_release;return 1; }
     if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" ]; then
         desired='{}'
         [ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] || desired=$(cat "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
-        transferred=$(printf '%s' "$desired" | jq -r --slurpfile duck "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" 'if (.versions.master // 0)>$duck[0].revision then .volumes.master else $duck[0].saved_master end')
+        transferred=$(printf '%s' "$desired" | jq -r --slurpfile duck "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" 'if (.versions.master // 0)>$duck[0].revision then .volumes.master else $duck[0].volumes.master end')
         [ -z "$transferred" ] || BRIDGE_MASTER_SAVED=$transferred
-        rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.duck" "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json"
+        BRIDGE_DUCK_TRANSFER=true
     fi
+    values=$(jq -nc --argjson master "${BRIDGE_MASTER_SAVED:-null}" --argjson bt "${BRIDGE_BT_SAVED:-null}" '{master:$master,bluetooth:$bt}|with_entries(select(.value!=null))') || { flock -u 7;bridge_voice_release;return 1; }
+    handoff=''
+    [ "$BRIDGE_DUCK_TRANSFER" != true ] || handoff="$BRIDGE_RUNTIME/xiaoai_bridge.duck.json"
+    # One atomic commit: neither a failed write nor an unsuccessful audio
+    # reservation may discard the remote duck's recoverable baseline.
+    bridge_volume_journal "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" "$values" "$handoff" "$BRIDGE_HARDWARE_MASTER" || { flock -u 7;bridge_voice_release;return 1; }
+    BRIDGE_MASTER_SAVED=$(jq -r '.volumes.master' "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json")
     BRIDGE_VOICE_VOLUME_SAVED=true
     flock -u 7
     bridge_profile wake_volumes
@@ -43,28 +66,72 @@ bridge_voice_begin() {
     # announcement when this event arrives; a Conversation releases session lock
     # before waiting for audio, so the voice pipeline cannot deadlock with it.
     exec 8> "$BRIDGE_RUNTIME/xiaoai_bridge.audio.lock"
-    bridge_lock_for 120 8 || { bridge_voice_release; return 1; }
+    bridge_lock_for "${XIAOAI_AUDIO_WAIT:-120}" 8 || { bridge_restore_volume; return 1; }
     export XIAOAI_VOICE_AUDIO_LOCK=1
+    if [ "$BRIDGE_DUCK_TRANSFER" = true ]; then
+        rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.duck" "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json"
+    fi
     bridge_profile recording_ready
 }
 
+bridge_voice_attenuate() {
+    exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
+    bridge_lock_for 3 7 || return 1
+    # The original set_volume launches background amixer children outside this
+    # lock. Keep the same two channels but finish both writes before recording.
+    if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" ]; then
+        jq --argjson applied "$1" '.applied_master=$applied' "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" |
+            atomic_json "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" || { flock -u 7;return 1; }
+    fi
+    amixer sset mysoftvol "${1}%" >/dev/null 2>&1 &&
+        amixer sset bluetooth "${1}%" >/dev/null 2>&1
+    attenuation_result=$?
+    flock -u 7
+    return "$attenuation_result"
+}
+
+# The private Listener's empty-STT miplay wrapper calls set_volume before its
+# notification. Keep that behavior under the same lock, without discarding the
+# journal needed for final cleanup and newer HA volume requests.
+set_volume() {
+    if [ "${BRIDGE_VOICE_VOLUME_SAVED:-false}" = true ]; then
+        bridge_volume_recover "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" 3 keep
+    else
+        bridge_voice_attenuate "$1"
+    fi
+}
+
 bridge_voice_release() {
-    if [ "${XIAOAI_VOICE_LED_LOCK:-0}" = 1 ]; then flock -u 6;fi
+    if [ "${XIAOAI_VOICE_AUDIO_LOCK:-0}" = 1 ]; then flock -u 8;fi
+    export XIAOAI_VOICE_AUDIO_LOCK=0
+    if [ "${XIAOAI_VOICE_LED_LOCK:-0}" = 1 ]; then
+        # Also cover a failed snapshot/audio reservation after show_led 1.
+        if [ -x /bin/shut_led ]; then
+            for bridge_led_mode in 1 2 3; do /bin/shut_led "$bridge_led_mode";done
+        fi
+        flock -u 6
+    fi
     export XIAOAI_VOICE_LED_LOCK=0
-    rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
-    "$BRIDGE_BIN" --emit '{"type":"voice_end"}' >/dev/null 2>&1 || true
-    trap - HUP INT TERM
+    owner='';[ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice" ] || read owner owner_start < "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
+    if [ "$owner" = "$$" ]; then
+        rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
+        "$BRIDGE_BIN" --emit '{"type":"voice_end"}' >/dev/null 2>&1 || true
+    fi
+}
+
+bridge_voice_cleanup() {
+    trap - 0 HUP INT TERM
+    if [ "${BRIDGE_VOICE_VOLUME_SAVED:-false}" = true ]; then bridge_restore_volume || true
+    else bridge_voice_release;fi
+    owner='';[ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" ] || read owner owner_start owner_version < "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready"
+    [ "$owner" != "$$" ] || rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready"
+    if command -v kws_guard_cleanup >/dev/null 2>&1; then kws_guard_cleanup || true;fi
+    bridge_oauth_leave || true
+    bridge_recovery_schedule
 }
 
 bridge_voice_exit() {
-    trap - HUP INT TERM
-    if [ "${BRIDGE_VOICE_VOLUME_SAVED:-false}" = true ]; then
-        SAVED_VOL=${BRIDGE_MASTER_SAVED:-0}
-        bridge_restore_volume || true
-    else
-        bridge_voice_release
-    fi
-    command -v kws_guard_cleanup >/dev/null 2>&1 && kws_guard_cleanup
+    bridge_voice_cleanup
     exit 143
 }
 
@@ -87,22 +154,15 @@ bridge_process_text() {
 }
 
 bridge_restore_volume() {
-    exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
-    bridge_lock_for 3 7 || return 1
-    master=${BRIDGE_MASTER_SAVED:-$SAVED_VOL}
-    bluetooth=${BRIDGE_BT_SAVED:-$SAVED_VOL}
-    if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ]; then
-        desired=$(jq -c --argjson before "${BRIDGE_VOICE_REVISION:-0}" \
-            '{master:(if (.versions.master // 0)>$before then .volumes.master else null end),bluetooth:(if (.versions.bluetooth // 0)>$before then .volumes.bluetooth else null end)}' "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
-        next_master=$(printf '%s' "$desired" | jq -r '.master // empty')
-        next_bt=$(printf '%s' "$desired" | jq -r '.bluetooth // empty')
-        [ -n "$next_master" ] && master=$next_master
-        [ -n "$next_bt" ] && bluetooth=$next_bt
-    fi
-    amixer sset mysoftvol "${master}%" >/dev/null 2>&1 || true
-    [ -n "$bluetooth" ] && amixer sset bluetooth "${bluetooth}%" >/dev/null 2>&1 || true
-    flock -u 7
-    if [ "${XIAOAI_VOICE_AUDIO_LOCK:-0}" = 1 ];then flock -u 8;fi
-    export XIAOAI_VOICE_AUDIO_LOCK=0
+    restore_result=0
+    bridge_volume_recover "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" || restore_result=1
+    BRIDGE_VOICE_VOLUME_SAVED=false
+    # Lock/mixer failure must never retain audio, voice or LED ownership.
     bridge_voice_release
+    bridge_recovery_schedule
+    return "$restore_result"
 }
+
+# Cover failures during model/date/STT/OAuth initialization, before readiness.
+trap 'bridge_voice_exit' HUP INT TERM
+trap 'bridge_voice_cleanup' 0

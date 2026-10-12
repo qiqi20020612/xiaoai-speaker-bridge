@@ -70,7 +70,9 @@ HACS 添加本仓库为 **Integration** 自定义仓库并安装，重启 HA，�
 
 HACS 安装布局与本地 `brand/` 资源遵循 [HACS Integration 要求](https://www.hacs.xyz/docs/publish/integration/) 和 [HA 集成文件结构](https://developers.home-assistant.io/docs/creating_integration_file_structure/)。HACS 只安装 HA 端。安装包固定下载入口是 [GitHub Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases)；尚未发版的构建可从 [CI](https://github.com/qiqi20020612/xiaoai-speaker-bridge/actions/workflows/ci.yml) 获取。仅声明已测 LX06/ARM EABI5 hard-float 兼容，音箱包须由用户审阅部署。
 
-下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS` 到同一目录，执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）。`v*` tag 经全部 CI 后才创建新 Release；手动发布也重新构建、严格校验，不能覆盖已有正式/预发布或草稿。维护者发版流程见[发布说明](docs/releases.md)。本次正式版本为 **0.1.4**；草稿附件上传后会下载复核，全部通过后才公开。
+下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS` 到同一目录，执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）。`v*` tag 经全部 CI 后才创建新 Release；手动发布也重新构建、严格校验，不能覆盖已有正式/预发布或草稿。维护者发版流程见[发布说明](docs/releases.md)。本次正式版本为 **0.1.5**；草稿附件上传后会下载复核，全部通过后才公开。
+
+当前稳定 LX06 **直接从 0.1.3 升级到 0.1.5**。完整审计修复、剩余风险、私有适配再生成、升级前检查、失败恢复和真机测试清单见 [LX06 0.1.5 专项说明](docs/lx06-v015.md)。本轮没有操作真实 LX06 或 HA。
 
 音箱安装器默认 `--dry-run`。原配置不会被通用模板替换；共享语音入口需要从本机实际 launcher 生成私有副本，并另行启用一行引导。LED 协调通过审阅既有 LED 程序的守护补丁实现，**不修改 Shairport 配置或软件音量曲线**。详情和移除方法见安装文档。
 

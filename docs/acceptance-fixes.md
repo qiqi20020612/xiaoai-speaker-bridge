@@ -1,6 +1,6 @@
-# 0.1.4：0.1.3 验收问题修复与复验
+# 0.1.5：0.1.3 验收问题修复与复验
 
-本轮基于用户 2026-10-12 的 LX06 验收记录。用户已验证语音、上下文、AirPlay、音量、抢占/取消/队列/幂等和重启链路；空闲主进程 RSS/HWM 380 KB、31 分钟内稳定的记录不代表短寿命 worker 或负载峰值。本轮开发未连接或修改音箱。
+本轮基于用户 2026-10-12 的 LX06 验收记录。用户已验证语音、上下文、AirPlay、音量、抢占/取消/队列/幂等和重启链路；空闲主进程 RSS/HWM 380 KB、31 分钟内稳定的记录不代表短寿命 worker 或负载峰值。本轮使用只读真机审计的脱敏结构；未部署或改变音箱/HA。完整修复映射及真机清单见 [0.1.5 LX06 修复记录](lx06-v015.md)。
 
 ## 修复范围
 
@@ -19,7 +19,7 @@
 
 ## 远程灯效
 
-HA 队列中的 queued/accepted 仅显示任务状态，不抢占当前声音的灯。设备工作时 processing 为橙色；调用原 TTS 时 synthesizing 为紫色；只有检测到该 TTS 的 miplay 后代才显示蓝色 playing。无回复播报的文字任务只有处理灯。完成、失败、取消走同一清理，恢复此前命令灯或重放经过适配的原 AirPlay 音量灯。语音持有同一 LED 锁并优先让远程任务退让。
+HA 队列中的 queued/accepted 仅显示任务状态，不抢占当前声音的灯。设备工作时 processing 为橙色；调用原 TTS 时 synthesizing 为紫色；只有检测到该 TTS 进程或后代中的 miplay、mpg123、ogg123、aplay才显示青色 playing。无回复播报的文字任务只有处理灯。完成、失败、取消走同一清理，恢复此前命令灯或重放经过适配的原 AirPlay 音量灯。语音持有同一 LED 锁并优先让远程任务退让。
 
 默认 `verified.task_led=false`，独立于原有手动灯光 `verified.led`。只有用户确认该型号的真实 sysfs 原语、审核并启用新版 airplay-led 私有副本后，才同时设置 `verified.led=true`、`verified.task_led=true`。已有手动灯光配置升级后不会自动启用远程灯效。测试使用临时文件，不等价于 LX06 灯效验收。
 
@@ -27,7 +27,7 @@ HA 队列中的 queued/accepted 仅显示任务状态，不抢占当前声音的
 
 HA 配置中的“播报时压低背景音乐”默认关闭；开启后上限默认 10%，来自已验证的本地语音避让目标。该值是绝对上限，原音量更低时不提高也不再乘一次比例。音箱还必须设置 `verified.announcement_ducking=true`，由用户先确认 AirPlay 确实通过 mysoftvol、TTS 使用独立 notifyvol；多来源或状态不确定时跳过。
 
-取消、TTS 失败、超时的 TERM 清理恢复原值或用户新目标。语音抢占时，原始恢复值在 volume.lock 下移交给 listener；旧 ducking 不把衰减值当原值，也不覆盖录音期衰减。Bridge 的 SIGKILL 和突然掉电无法运行 Shell 清理，重启由已有 HA 期望值同步；该异常路径仍需真机检查。
+取消、TTS 失败、超时的 TERM 清理恢复原值或用户新目标。语音抢占时，原始恢复值在 volume.lock 下移交给 listener；旧 ducking 不把衰减值当原值，也不覆盖录音期衰减。恢复锁/混音器失败保留 /tmp 恢复记录，释放音频/语音/LED 所有权后有界重试，下一次安全的语音/任务/音量操作也重试。/tmp 在掉电后可能丢失，重启及 OOM 路径仍需真机检查。发送端目标已改变时不回写旧 master；共享 mysoftvol 的极短竞态仍未经过功能验收。
 
 ## 文本输入隐私
 
@@ -59,7 +59,7 @@ recorder:
 
 时间使用 Linux `/proc/uptime`。wake→wake_led 是进入 Bridge hook 后的本地亮灯时间，不包含树莓派 KWS 通信；wake_led→recording_ready 包括音量、快照、event emit、音频锁。recording_ready 是允许原录音逻辑继续，不是录音设备真实启动，应单独对齐原录音日志。
 
-task_begin→task_parsed 测本地解析；session_wait→session_ready 测锁；config_ready/sources_ready/voice_guard_finished/volume_plan_finished/intent_finished/conversation_begin/conversation_finished 区分本地与网络。tts_launch→tts_playing 是观测到播放器的延迟，tts_launch→tts_finished 包含合成与播放。原 TTS 首包没有单独观测点，不能把任务总时间认作网络合成时间；未发现 miplay 时不伪造 playing。原 Agent 内部 jq 与 OAuth 由原脚本管理，Conversation 包络不等于纯 LLM 时间。
+task_begin→task_parsed 测本地解析；session_wait→session_ready 测锁；config_ready/sources_ready/voice_guard_finished/volume_plan_finished/intent_finished/conversation_begin/conversation_finished 区分本地与网络。tts_launch→tts_playing 是观测到播放器的延迟，tts_launch→tts_finished 包含合成与播放。原 TTS 首包没有单独观测点，不能把任务总时间认作网络合成时间；未发现本次调用的播放器时不伪造 playing。原 Agent 内部 jq 与 OAuth 由原脚本管理，Conversation 包络不等于纯 LLM 时间。
 
 使用 `python3 tools/profile_report.py /path/to/copied.profile` 输出各 PID 的相邻阶段耗时。先复制用户审阅过的阶段记录到本地；不要提交原对话日志或私有运行配置。
 
@@ -69,10 +69,10 @@ task_begin→task_parsed 测本地解析；session_wait→session_ready 测锁�
 
 ## 手动升级与复验
 
-通过 [Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases) 下载 0.1.4 包并校验 SHA256。用本版工具从保存的未修改原脚本重新生成私有 listener/airplay-led 副本并检查 diff/hash；放入解压包的 adapter 后执行 `install.sh --dry-run`、`--apply`。安装器只沿用 review format=2、hooks revision=2、原始/输出哈希和 hook 顺序均匹配且不残留 show_led 调用的副本；否则在替换文件/重启服务前明确要求重新生成，相同包重装也校验。原配置和 UUID/token 被保留。升级后的 HA 配置可直接使用旧选项，不需重新配对。
+通过 [Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases) 下载 0.1.5 包并校验 SHA256。用本版工具从保存的未修改原脚本重新生成私有 listener/airplay-led 副本并检查 diff/hash；放入解压包的 adapter 后执行 `install.sh --dry-run`、`--apply`。安装器只沿用 review format=3、hooks revision=3、原始/输出哈希和 hook 顺序均匹配且仅保留经过审阅的 show_led 2/11 调用的副本；否则在替换文件/重启服务前明确要求重新生成，相同包重装也校验。原配置和 UUID/token 被保留。升级后的 HA 配置可直接使用旧选项，不需重新配对。
 
 已启用的旧 AirPlay LED 保护若与新版副本不匹配，先用旧安装目录的 `tools/activate_airplay_led.sh --remove` 恢复原程序，升级后再审核启用新版保护。升级时保持 `verified.task_led=false`；只有新版保护已启用并完成验证后才开启。
 
-回滚使用同一完整包的 `install.sh --rollback`；HA 回退版本后重启。新增实体可能不可用，保留它们的 registry 供以后恢复，不改旧 ID。0.1.4 的三个版本字段同步更新，正式 tag 必须指向通过完整 CI 的合并提交。本轮发布不执行真机部署。
+回滚使用同一完整包的 `install.sh --rollback`；HA 回退版本后重启。新增实体可能不可用，保留它们的 registry 供以后恢复，不改旧 ID。0.1.5 的三个版本字段同步更新，正式 tag 必须指向通过完整 CI 的合并提交。本轮发布不执行真机部署。
 
 按用户原验收脚本复跑 E1～E5、G4～G8、H1～H5；再检查重启、空闲 ≥31 分钟与实际负载峰值/短寿命 worker/原 listener/整机资源。MPD 队列/控制及其他机型另行实测。

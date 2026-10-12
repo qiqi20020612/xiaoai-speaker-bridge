@@ -26,3 +26,26 @@ bridge_lock_for() (
         fi
     done
 )
+
+# The installed OAuth Cron already owns this mkdir lock before sourcing Listener.
+# Cooperate with that 0.1.3 writer as well as the new config FD; never break an
+# unowned/stale lock automatically or echo any authentication values.
+bridge_oauth_enter() {
+    BRIDGE_OAUTH_DIRECTORY=$1/ha_oauth_refresh.lock
+    oauth_wait=${2:-35}
+    while ! mkdir "$BRIDGE_OAUTH_DIRECTORY" 2>/dev/null; do
+        [ "$oauth_wait" -gt 0 ] || return 1
+        sleep 1;oauth_wait=$((oauth_wait-1))
+    done
+    printf '%s\n' "$$" > "$BRIDGE_OAUTH_DIRECTORY/bridge-owner"
+}
+bridge_oauth_leave() {
+    [ -n "${BRIDGE_OAUTH_DIRECTORY:-}" ] || return 0
+    oauth_owner=''
+    [ ! -r "$BRIDGE_OAUTH_DIRECTORY/bridge-owner" ] || read oauth_owner < "$BRIDGE_OAUTH_DIRECTORY/bridge-owner"
+    if [ "$oauth_owner" = "$$" ]; then
+        rm -f "$BRIDGE_OAUTH_DIRECTORY/bridge-owner"
+        rmdir "$BRIDGE_OAUTH_DIRECTORY" 2>/dev/null || return 1
+    fi
+    BRIDGE_OAUTH_DIRECTORY=''
+}

@@ -25,6 +25,11 @@ command -v flock >/dev/null 2>&1 || exit 1
 exec 9> /tmp/xiaoai_bridge.activate.lock
 flock -n 9 || exit 1
 . "$DIR/lib/common.sh"
+bridge_oauth_enter "$BRIDGE_RUNTIME" 35 || exit 1
+trap 'bridge_oauth_leave' 0
+trap 'exit 143' HUP INT TERM
+exec 4> "$BRIDGE_RUNTIME/xiaoai_bridge.config.lock"
+bridge_lock_for 35 4 || exit 1
 voice_busy && { printf '%s\n' 'Voice interaction is active; retry when idle';exit 1; }
 before=$(sha256sum "$CONFIG" | awk '{print $1}')
 if [ "$MODE" = --remove ]; then
@@ -53,7 +58,9 @@ mv -f "$CONFIG.xiaoai.new" "$CONFIG"
 if [ "$MODE" = --apply ]; then
     jq '.enable_listener_adapter=true' "$DIR/config.json" > "$DIR/config.json.new"
     chmod 600 "$DIR/config.json.new";mv -f "$DIR/config.json.new" "$DIR/config.json"
-    "$DIR/lib/listener-service.sh" restart 9>&-
+    flock -u 4
+    bridge_oauth_leave
+    "$DIR/lib/listener-service.sh" restart 4>&- 9>&-
 else
     jq '.enable_listener_adapter=false' "$DIR/config.json" > "$DIR/config.json.new"
     chmod 600 "$DIR/config.json.new";mv -f "$DIR/config.json.new" "$DIR/config.json"

@@ -16,9 +16,10 @@ bridge_duck_begin() {
     awk -v target="$DUCK_VOLUME" -v current="$saved" 'BEGIN {exit !(target<current)}' || { flock -u 7;return 0; }
     rev=0
     [ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] || rev=$(jq -r '.revision // 0' "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
-    jq -nc --argjson saved "$saved" --argjson revision "$rev" '{saved_master:$saved,revision:$revision}' > "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json.$$" || fail state_write_failed
-    mv -f "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json.$$" "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json"
-    printf '%s\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.duck"
+    bridge_volume_journal "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" "{\"master\":$saved}" || { flock -u 7;fail state_write_failed; }
+    jq --argjson applied "$DUCK_VOLUME" '.applied_master=$applied' "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" |
+        atomic_json "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" || { flock -u 7;fail state_write_failed; }
+    bridge_mark_owner "$BRIDGE_RUNTIME/xiaoai_bridge.duck"
     BRIDGE_DUCK_SAVED=$saved
     BRIDGE_DUCK_REVISION=$rev
     BRIDGE_DUCK_ACTIVE=true
@@ -30,17 +31,9 @@ bridge_duck_restore() {
     [ "$BRIDGE_DUCK_ACTIVE" = true ] || return 0
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
     bridge_lock_for 3 7 || return 1
-    value=$BRIDGE_DUCK_SAVED
-    if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ]; then
-        latest=$(jq -r --argjson before "$BRIDGE_DUCK_REVISION" 'if (.versions.master // 0)>$before then .volumes.master // empty else empty end' "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
-        [ -n "$latest" ] && value=$latest
-    fi
-    if voice_busy; then
-        # Leave the snapshot for voice_begin under this lock, in either ordering.
-        :
-    else
-        amixer sset mysoftvol "${value}%" >/dev/null 2>&1 || { flock -u 7;return 1; }
-        rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.duck" "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json"
+    if ! voice_busy; then
+        bridge_volume_recover_locked "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" || { flock -u 7;return 1; }
+        rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.duck"
     fi
     BRIDGE_DUCK_ACTIVE=false
     flock -u 7

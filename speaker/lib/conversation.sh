@@ -44,6 +44,28 @@ bridge_refresh_ha_token() {
     [ -n "${HA_REFRESH_TOKEN:-}" ] || return 1
     auth_source=${BRIDGE_CONFIG_AUTH:-$(config_value '.ha_auth_source // "/data/porcupine_launcher_kws"')}
     [ -r "$auth_source" ] || return 1
+    bridge_oauth_enter "$BRIDGE_RUNTIME" 35 || return 1
+    exec 4> "$BRIDGE_RUNTIME/xiaoai_bridge.config.lock"
+    if ! bridge_lock_for 35 4; then bridge_oauth_leave;return 1;fi
+    previous_token=$HA_TOKEN
+    # A Cron refresh may have rotated credentials while this task waited. Load
+    # only authentication values from the trusted config in a subshell; retain
+    # the selected Agent/cache/TTL and transport functions in this task.
+    refresh_credentials=$(
+        . "$LISTENER_CONFIG"
+        printf '%s\n' "$HA_URL" "$HA_TOKEN" "$HA_REFRESH_TOKEN"
+    ) || { flock -u 4;bridge_oauth_leave;return 1; }
+    {
+        IFS= read -r HA_URL
+        IFS= read -r HA_TOKEN
+        IFS= read -r HA_REFRESH_TOKEN
+    } <<EOF
+$refresh_credentials
+EOF
+    unset refresh_credentials
+    if [ "$HA_TOKEN" != "$previous_token" ]; then
+        flock -u 4;bridge_oauth_leave;return 0
+    fi
     # Extract only the reviewed original refresh function; never execute the KWS
     # launcher. Keep its grant, client ID and HA_TOKEN persistence. Its fatal
     # playback/service-stop branch becomes a task failure in this child pipeline.
@@ -66,19 +88,24 @@ bridge_refresh_ha_token() {
         }
         {
             if (index($0,"grant_type=refresh_token&client_id=http://${SPEAKER_IP}&refresh_token=${HA_REFRESH_TOKEN}")) grant=1
+            if (index($0,"curl -s -f -d")) sub(/curl -s -f -d/,"curl --connect-timeout 5 --max-time 30 -s -f -d")
             if (index($0,"sed -i \"s/^HA_TOKEN=.*/HA_TOKEN=${HA_TOKEN}/\" ${CONFIG_FILE}")) persist=1
             gsub(/\/tmp\/ha_token.json/,"\"$WORK/ha_token.json\"")
             print
             if ($0=="}") {complete=1;exit}
         }
         END {if (!complete || !safe_error || !token || !grant || !persist) exit 1}
-    ' "$auth_source" > "$WORK/refresh.sh" || return 1
-    sh -n "$WORK/refresh.sh" || return 1
-    . "$WORK/refresh.sh" || return 1
+    ' "$auth_source" > "$WORK/refresh.sh" || { flock -u 4;bridge_oauth_leave;return 1; }
+    sh -n "$WORK/refresh.sh" || { flock -u 4;bridge_oauth_leave;return 1; }
+    . "$WORK/refresh.sh" || { flock -u 4;bridge_oauth_leave;return 1; }
     CONFIG_FILE=$LISTENER_CONFIG
     # The original function calls curl() for /auth/token. The Agent delegates
     # that URL unchanged to real curl; it never touches the conversation cache.
-    ha_refresh_token > "$WORK/refresh.out" 2> "$WORK/refresh.err"
+    refresh_result=0
+    ha_refresh_token > "$WORK/refresh.out" 2> "$WORK/refresh.err" || refresh_result=$?
+    flock -u 4
+    bridge_oauth_leave
+    return "$refresh_result"
 }
 
 bridge_conversation_request() {

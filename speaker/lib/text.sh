@@ -44,12 +44,7 @@ restore_tts_volume() {
     [ "$TTS_OVERRIDE_ACTIVE" = true ] || return 0
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
     bridge_lock_for 3 7 || return 1
-    value=$TTS_RESTORE_VALUE
-    if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ]; then
-        latest=$(jq -r --argjson before "$TTS_RESTORE_REVISION" 'if (.versions.tts // 0)>$before then .volumes.tts // empty else empty end' "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" 2>/dev/null || true)
-        [ -n "$latest" ] && value=$latest
-    fi
-    [ -n "$value" ] && amixer sset notifyvol "${value}%" >/dev/null 2>&1 || return 1
+    bridge_volume_recover_locked "$BRIDGE_RUNTIME/xiaoai_bridge.tts-volume.json" || { flock -u 7;return 1; }
     TTS_OVERRIDE_ACTIVE=false
     flock -u 7
 }
@@ -65,6 +60,8 @@ cleanup() {
             --data-binary "@$WORK/guard-end.json" "${HA_URL%/}/api/xiaoai_speaker/$DEVICE_ID/voice_guard" >/dev/null 2>&1 || true
     fi
     rm -rf "$WORK"
+    bridge_oauth_leave || true
+    [ "$MODE" = voice ] || bridge_recovery_schedule
     bridge_profile task_finished
 }
 trap 'cleanup' 0
@@ -118,6 +115,7 @@ speak() {
         bridge_lock_for 120 8 || fail busy
         bridge_profile audio_ready
     fi
+    if [ "$MODE" != voice ]; then bridge_recover_pending || fail volume_recovery_pending;fi
     override=$OVERRIDE
     rev_before=0
     if [ -n "$override" ]; then
@@ -128,6 +126,7 @@ speak() {
         [ -n "$saved_tts" ] || fail volume_unknown
         TTS_RESTORE_VALUE=$saved_tts
         TTS_RESTORE_REVISION=$rev_before
+        bridge_volume_journal "$BRIDGE_RUNTIME/xiaoai_bridge.tts-volume.json" "{\"tts\":$saved_tts}" || { flock -u 7;fail state_write_failed; }
         TTS_OVERRIDE_ACTIVE=true
         amixer sset notifyvol "${override}%" >/dev/null 2>&1 || fail hardware_control_failed
         flock -u 7
@@ -142,7 +141,7 @@ speak() {
     while kill -0 "$tts_pid" 2>/dev/null; do
         if [ -r "/proc/$tts_pid/task/$tts_pid/children" ]; then
             children=$(cat "/proc/$tts_pid/task/$tts_pid/children")
-            pending=$children
+            pending="$tts_pid $children"
             playing=false
             visited=0
             while [ -n "$pending" ] && [ "$visited" -lt 64 ]; do
@@ -151,7 +150,7 @@ speak() {
                     case "$child" in *[!0-9]*|'') continue ;; esac
                     visited=$((visited+1))
                     comm=$(cat "/proc/$child/comm" 2>/dev/null || true)
-                    if [ "$comm" = miplay ]; then playing=true;break;fi
+                    case "$comm" in miplay|mpg123|ogg123|aplay) playing=true;break ;; esac
                     next="$next $(cat "/proc/$child/task/$child/children" 2>/dev/null || true)"
                 done
                 [ "$playing" = true ] && break

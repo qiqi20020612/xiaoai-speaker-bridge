@@ -27,7 +27,10 @@ n=$((n+1));printf '%s' "$n" > '{checks}'
     )
     stub(tools / "sleep", ":")
     stub(tmp_path / "squeezelite", f"printf '%s' \"$1\" >> '{stops}'")
-    stub(tmp_path / "bridge-start", f"printf '%s' started >> '{starts}'")
+    stub(
+        tmp_path / "bridge-start",
+        f"[ \"${{1:-}}\" != status ] || exit 0\nprintf '%s' started >> '{starts}'",
+    )
     (tmp_path / "uptime").write_text("200.01 100.0\n")
     source = (ROOT / "speaker/xiaoai_boot.sh").read_text()
     source = source.replace("PATH=/usr/sbin:/usr/bin:/sbin:/bin", f"PATH={tools}:/usr/bin:/bin")
@@ -67,3 +70,33 @@ def test_boot_failure_leaves_flag_unset_for_cron_retry(tmp_path, install_flock, 
     script.write_text(source)
     result = subprocess.run([*speaker_shell, str(script)])
     assert result.returncode != 0 and not (tmp_path / "xiaoai_boot.done").exists()
+
+
+def test_completed_boot_recovers_only_bridge_daemon_without_restarting_microphone(
+    tmp_path, install_flock, speaker_shell
+):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    install_flock(tools)
+    calls = tmp_path / "calls"
+    stub(
+        tmp_path / "bridge-start",
+        f"""printf '%s %s\\n' "$1" "${{XIAOAI_SKIP_LISTENER_START:-0}}" >> '{calls}'
+[ "$1" != status ]""",
+    )
+    stub(tools / "pidof", "exit 99")
+    (tmp_path / "xiaoai_boot.done").touch()
+    (tmp_path / "uptime").write_text("200.1 100\n")
+    source = (
+        (ROOT / "speaker/xiaoai_boot.sh")
+        .read_text()
+        .replace("PATH=/usr/sbin:/usr/bin:/sbin:/bin", f"PATH={tools}:/usr/bin:/bin")
+        .replace("/tmp/xiaoai_boot", str(tmp_path / "xiaoai_boot"))
+        .replace("/proc/uptime", str(tmp_path / "uptime"))
+        .replace("/data/xiaoai_bridge/start.sh", str(tmp_path / "bridge-start"))
+    )
+    script_file = tmp_path / "boot.sh"
+    script_file.write_text(source)
+    subprocess.run([*speaker_shell, str(script_file)], check=True)
+    assert calls.read_text().splitlines() == ["status 0", "start 1"]
+    assert (tmp_path / "xiaoai_boot.done").exists()

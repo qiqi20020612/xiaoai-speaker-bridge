@@ -22,7 +22,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define VERSION "0.1.4"
+#define VERSION "0.1.5"
 #define CLIENTS 8
 #define BODY 12288
 #define OUTPUT 32768
@@ -31,6 +31,7 @@
 #define LOCAL_MESSAGE 4096
 #define PROBE_TIMEOUT 15
 #define STARTUP_PROBE_ATTEMPTS 3
+#define CLEANUP_GRACE 20
 #define PROBE_INTERVAL 15
 #define LOG_LIMIT 65536
 
@@ -573,6 +574,21 @@ static void dispatch(int i, char *method, char *path, char *body) {
         error(i, 405, "method_not_allowed");
         return;
     }
+    // Keep health/state readable during an installation, but admit no new work.
+    char install_path[512];
+    runtime_path(install_path, sizeof install_path, "xiaoai_bridge.install.lock");
+    int install_fd = open(install_path, O_RDONLY | O_CLOEXEC);
+    if (install_fd >= 0) {
+        int install_busy = flock(install_fd, LOCK_SH | LOCK_NB) < 0;
+        close(install_fd);
+        if (install_busy) {
+            error(i, 503, "installation_in_progress");
+            return;
+        }
+    } else if (errno != ENOENT) {
+        error(i, 503, "installation_state_unavailable");
+        return;
+    }
     if (json_parse(&d, body, strlen(body)) < 0 || d.t[0].type != J_OBJECT) {
         error(i, 400, "invalid_json");
         return;
@@ -647,7 +663,7 @@ static void dispatch(int i, char *method, char *path, char *body) {
             for (int k = 0; k < WORKERS; k++)
                 if (workers[k].pid && workers[k].kind == 2 && workers[k].job == j) {
                     kill(-workers[k].pid, SIGTERM);
-                    workers[k].kill_at = monotime() + 5;
+                    workers[k].kill_at = monotime() + CLEANUP_GRACE;
                     strcpy(jobs[j].status, "cancelled");
                 }
         job_json(j, out, sizeof out);
@@ -1014,7 +1030,7 @@ static void read_local(void) {
             if (workers[k].pid && workers[k].kind == 2 &&
                 strcmp(jobs[workers[k].job].kind, "announce") == 0) {
                 kill(-workers[k].pid, SIGTERM);
-                workers[k].kill_at = monotime() + 5;
+                workers[k].kill_at = monotime() + CLEANUP_GRACE;
                 strcpy(jobs[workers[k].job].status, "cancelled");
                 strcpy(jobs[workers[k].job].result, "{\"error\":\"voice_preempted\"}");
             }
@@ -1206,7 +1222,7 @@ static int server(void) {
                         diagnostic("probe_deadline_exceeded", PROBE_TIMEOUT);
                     }
                     kill(-workers[k].pid, SIGTERM);
-                    workers[k].kill_at = now + 5;
+                    workers[k].kill_at = now + (workers[k].kind == 2 ? CLEANUP_GRACE : 5);
                 }
                 if (workers[k].kill_at && now > workers[k].kill_at)
                     kill(-workers[k].pid, SIGKILL);
@@ -1284,7 +1300,7 @@ static int server(void) {
     for (int k = 0; k < WORKERS; k++)
         if (workers[k].pid)
             kill(-workers[k].pid, SIGTERM);
-    double deadline = monotime() + 5;
+    double deadline = monotime() + CLEANUP_GRACE;
     for (int k = 0; k < WORKERS; k++)
         if (workers[k].pid) {
             int status;

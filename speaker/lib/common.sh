@@ -7,6 +7,25 @@ BRIDGE_DIR=${XIAOAI_BRIDGE_DIR:-/data/xiaoai_bridge}
 BRIDGE_BIN=${XIAOAI_BRIDGE_BIN:-$BRIDGE_DIR/bin/xiaoai_bridge}
 . "${XIAOAI_BRIDGE_HELPER_DIR:-$BRIDGE_DIR/lib}/locks.sh"
 
+bridge_pid_start() {
+    # The comm field can contain spaces; strip it before selecting starttime.
+    [ -r "/proc/$1/stat" ] || return 1
+    sed 's/^.*) //' "/proc/$1/stat" | awk '{print $20}'
+}
+bridge_mark_owner() {
+    printf '%s %s\n' "$$" "$(bridge_pid_start "$$" 2>/dev/null || true)" > "$1"
+}
+bridge_owner_alive() {
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$1" -gt 1 ] && kill -0 "$1" 2>/dev/null || return 1
+    [ -z "${2:-}" ] || [ "$2" = "$(bridge_pid_start "$1" 2>/dev/null)" ]
+}
+bridge_listener_pid() {
+    bridge_owner_alive "$1" "${2:-}" || return 1
+    tr '\000' '\n' < "/proc/$1/cmdline" 2>/dev/null |
+        grep -qxF "${XIAOAI_LISTENER_PATH:-$BRIDGE_DIR/adapter/listener.sh}"
+}
+
 # Opt-in, bounded phase trace. Only phase names/PID/monotonic timestamps; no text,
 # request payloads, credentials or responses. Linux read/printf are shell builtins.
 bridge_profile() {
@@ -27,32 +46,28 @@ request_value() { printf '%s' "$REQUEST" | jq -r "$1"; }
 
 voice_busy() {
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice" ] || return 1
-    read voice_owner < "$BRIDGE_RUNTIME/xiaoai_bridge.voice" || return 1
-    case "$voice_owner" in ''|*[!0-9]*) return 1 ;; esac
-    kill -0 "$voice_owner" 2>/dev/null
+    read voice_owner voice_start < "$BRIDGE_RUNTIME/xiaoai_bridge.voice" || return 1
+    bridge_owner_alive "$voice_owner" "$voice_start"
 }
 
 feedback_busy() {
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" ] || return 1
-    read feedback_owner < "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" || return 1
-    case "$feedback_owner" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$feedback_owner" -gt 1 ] && kill -0 "$feedback_owner" 2>/dev/null
+    read feedback_owner feedback_start < "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" || return 1
+    bridge_owner_alive "$feedback_owner" "$feedback_start"
 }
 
 bridge_led_busy() { voice_busy || feedback_busy; }
 
 duck_busy() {
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.duck" ] || return 1
-    read duck_owner < "$BRIDGE_RUNTIME/xiaoai_bridge.duck" || return 1
-    case "$duck_owner" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$duck_owner" -gt 1 ] && kill -0 "$duck_owner" 2>/dev/null
+    read duck_owner duck_start < "$BRIDGE_RUNTIME/xiaoai_bridge.duck" || return 1
+    bridge_owner_alive "$duck_owner" "$duck_start"
 }
 
 hooks_ready() {
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" ] || return 1
-    read hook_owner < "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" || return 1
-    case "$hook_owner" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$hook_owner" -gt 1 ] && kill -0 "$hook_owner" 2>/dev/null
+    read hook_owner hook_start hook_version < "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" || return 1
+    [ "$hook_version" = 3 ] && bridge_listener_pid "$hook_owner" "$hook_start"
 }
 
 atomic_json() {
@@ -96,6 +111,9 @@ mixer_name() {
     esac
 }
 
+[ "${BRIDGE_VOLUME_RECOVERY_LOADED:-0}" = 1 ] ||
+    . "${XIAOAI_BRIDGE_HELPER_DIR:-$BRIDGE_DIR/lib}/volume-recovery.sh"
+
 # Store only desired hardware values and a revision, not HA policy or a task queue.
 volume_write() (
     channel=$1
@@ -103,6 +121,9 @@ volume_write() (
     case "$channel" in master|tts|bluetooth|headphone|airplay) ;; *) fail unsupported_volume_target ;; esac
     printf '%s' "$level" | grep -Eq '^[0-9]+([.][0-9]+)?$' || fail invalid_volume
     awk -v n="$level" 'BEGIN {exit !(n>=0 && n<=100)}' || fail invalid_volume
+    # An explicit new target must remain usable to resolve an ambiguous sender
+    # recovery; its revision supersedes the retained baseline under this lock.
+    if ! voice_busy; then bridge_recover_pending || true;fi
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
     bridge_lock_for 3 7 || fail busy
     if [ "$channel" = airplay ]; then
@@ -139,6 +160,7 @@ volume_write() (
     applied=true
     voice_busy && case "$channel" in master|bluetooth) applied=false ;; esac
     duck_busy && [ "$channel" = master ] && applied=false
+    bridge_recovery_schedule
     printf '{"target":"%s","level":%s,"applied":%s,"deferred":%s}\n' \
         "$channel" "$level" "$applied" "$( [ "$applied" = true ] && printf false || printf true )"
 )

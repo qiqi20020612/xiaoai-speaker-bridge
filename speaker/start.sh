@@ -66,7 +66,7 @@ stop_bridge() {
     kill -TERM "$owner" || return 1
     count=0
     while owned_pid; do
-        [ "$count" -lt 15 ] || return 1
+        [ "$count" -lt 25 ] || return 1
         sleep 1;count=$((count+1))
     done
     rm -f "$PIDFILE"
@@ -124,7 +124,7 @@ while :;do
     sleep 1
 done
 start_diagnostic ready 0
-if jq -e '.enable_listener_adapter==true' "$CONFIG" >/dev/null 2>&1; then
+if [ "${XIAOAI_SKIP_LISTENER_START:-0}" != 1 ] && jq -e '.enable_listener_adapter==true' "$CONFIG" >/dev/null 2>&1; then
     "$DIR/lib/listener-service.sh" start || { start_failure listener_adapter_failed 1;exit 1; }
 fi
 exit 0
