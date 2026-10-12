@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,12 @@ from tests.test_text_pipeline import text_device as text_device
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests/fixtures"
+
+
+def redirect_fixture(source, mapping):
+    # One pass: Linux's /tmp targets must not be rewritten a second time.
+    pattern = re.compile("|".join(re.escape(key) for key in sorted(mapping, key=len, reverse=True)))
+    return pattern.sub(lambda match: str(mapping[match.group()]), source)
 
 
 def run_shell(body, env, speaker_shell, timeout=10):
@@ -338,9 +345,14 @@ def test_full_real_tts_fallback_chain_reports_playing(text_device, provider):
         source = (FIXTURES / f"lx06_tts_{name}.sh").read_text()
         script(
             target,
-            source.replace("/data/", str(data) + "/")
-            .replace("/tmp/", str(path) + "/")
-            .replace("/bin/miplay", str(path / "tools/miplay")),
+            redirect_fixture(
+                source,
+                {
+                    "/data/": str(data) + "/",
+                    "/tmp/": str(path) + "/",
+                    "/bin/miplay": path / "tools/miplay",
+                },
+            ),
         )
     config = json.loads((path / "config.json").read_text())
     config["tts_path"] = str(data / "tts_doubao")
@@ -526,14 +538,17 @@ else:os.execv({real_curl!r},[{real_curl!r},*args])
     )
     listener = bridge / "adapter/listener.sh"
     source = prepare_listener((FIXTURES / "lx06_launcher.sh").read_text())
-    source = (
-        source.replace("/data/xiaoai_bridge", str(bridge))
-        .replace("/data/", str(data) + "/")
-        .replace("/tmp/", str(path) + "/")
-        .replace("/dev/kmsg", str(path / "kmsg"))
-        .replace("/etc/init.d/api", str(tools / "api-service"))
-        .replace("/bin/show_led", str(tools / "show-led"))
-        .replace("/bin/shut_led", str(tools / "shut-led"))
+    source = redirect_fixture(
+        source,
+        {
+            "/data/xiaoai_bridge": bridge,
+            "/data/": str(data) + "/",
+            "/tmp/": str(path) + "/",
+            "/dev/kmsg": path / "kmsg",
+            "/etc/init.d/api": tools / "api-service",
+            "/bin/show_led": tools / "show-led",
+            "/bin/shut_led": tools / "shut-led",
+        },
     )
     # Stop after one complete original iteration; all init/function/pipeline
     # branches above it remain intact. No real device command is reachable.

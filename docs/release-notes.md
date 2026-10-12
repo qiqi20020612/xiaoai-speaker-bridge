@@ -1,5 +1,7 @@
 0.1.5 是下一次 LX06 测试版本，直接从已验证的 0.1.3 升级；无需安装或验收 0.1.4。本轮发布未部署、重启或操作真实 LX06/HA，自动化检查不能替代真机验收。
 
+Release 提供 LX06 安装包、HA ZIP、`RELEASE_NOTES.md` 和 `SHA256SUMS`。下载同一版本的全部附件，先执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）；私有适配另外核验 review.json。
+
 - 修复只读审计 F01～F07：真实 Launcher 的 LED 1/2/11、已启用 0.1.3 的完整失败恢复、AW20054 BGR、恢复锁失败清理、ducking 接管、Microsoft/Google/豆包播放检测、KWS 重入与私有进程身份。
 - review format=3：用本版 prepare_adapters.py 从未修改的 Launcher、kws_guard 和 AirPlay LED 原件重新生成三个私有副本，核验原始字节 SHA256、输出 SHA256 和完整顺序；不更改设备原 KWS client/guard、OAuth、Agent 或 TTS 脚本。
 - 音量恢复记录逐通道保存，锁或硬件失败也释放音频/语音/LED所有权；对已改变的 AirPlay 发送端目标保守恢复，新 HA 音量目标优先。目标仍与临时 cap 无法区分时保留 pending，不猜测硬件映射。
