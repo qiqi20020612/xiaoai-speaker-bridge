@@ -4,13 +4,27 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing v* tag to rebuild and validate (empty for normal CI)"
+        type: string
+        default: ""
+      publish:
+        description: "Publish a NEW release after all checks pass"
+        type: boolean
+        default: false
+      channel:
+        description: "Must agree with the tag version"
+        type: choice
+        options: [auto, stable, prerelease]
+        default: auto
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   tests:
@@ -19,6 +33,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
@@ -59,6 +76,11 @@ jobs:
         run: |
           make -C speaker
           make -C speaker check
+      - name: POSIX shell static checks
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning -s sh -e SC1090,SC1091,SC2034,SC2016,SC2015 speaker/*.sh speaker/lib/*.sh speaker/tools/*.sh
       - name: Real BusyBox, HA fixtures and installer failure regression tests
         run: python -m pytest --junitxml=build/tests.xml
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -74,6 +96,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
@@ -93,12 +118,10 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq qemu-user
           qemu-arm build/armhf/xiaoai_bridge --version
-      - name: Package generic speaker endpoint and HA integration
+      - name: Package checked LX06 EABI5 hard-float and HA assets
         run: |
-          python tools/package_speaker.py --binary build/armhf/xiaoai_bridge --output dist/xiaoai-bridge-armhf.tar.gz
-          zip -q -r dist/xiaoai-speaker-ha.zip custom_components/xiaoai_speaker
-          cd dist
-          sha256sum xiaoai-bridge-armhf.tar.gz xiaoai-speaker-ha.zip > SHA256SUMS
+          python -m tools.release package --binary build/armhf/xiaoai_bridge --output dist
+          (cd dist && sha256sum --check SHA256SUMS)
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: generic-two-end-packages
@@ -111,6 +134,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
       - uses: home-assistant/actions/hassfest@06749dd8c0b54f350bc69c8752456cee498808a3
 
   hacs:
@@ -119,7 +145,44 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
       - uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa
         with:
           category: integration
           comment: false
+
+  release:
+    name: Publish a new tested tag (never overwrite)
+    needs: [tests, armhf, hassfest, hacs]
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish && inputs.release_tag != '')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.release_tag || github.ref }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Validate exact existing tag and all version fields
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: python -m tools.release validate --tag "$RELEASE_TAG"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: generic-two-end-packages
+          path: dist
+          digest-mismatch: error
+      - name: Verify assets, upload to a new draft, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          RELEASE_CHANNEL: ${{ inputs.channel || 'auto' }}
+        run: python -m tools.release publish --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY" --channel "$RELEASE_CHANNEL" --output dist

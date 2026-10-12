@@ -6,9 +6,9 @@
 
 ## 1. 构建/获取通用包
 
-在 GitHub CI 中下载 `generic-two-end-packages`，内含 HA ZIP、ARM hard-float 音箱包及校验值。包中没有配置令牌或任何具体设备的适配副本。
+从 [GitHub Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases) 下载同一版本的 LX06 ARM EABI5 hard-float 安装包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS`。没有正式发版的构建可使用 CI 的 `generic-two-end-packages`。包中没有配置令牌或具体设备的适配副本；只有 LX06 实测兼容，其他型号独立验证。
 
-解压 CI 产物后，在包含两个安装包及 `SHA256SUMS` 的同一目录执行 `sha256sum --check SHA256SUMS`，全部通过后再准备部署副本。
+在下载目录执行 `sha256sum --check SHA256SUMS`（macOS 使用 `shasum -a 256 --check SHA256SUMS`），全部通过后再准备部署副本。本轮升级和回滚另见[验收修复说明](acceptance-fixes.md)。
 
 也可以使用校验过的 Zig 0.14.1 交叉编译器：
 

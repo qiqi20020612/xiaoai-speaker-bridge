@@ -3,7 +3,7 @@
 set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 umask 077
-PACKAGE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PACKAGE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 DEST=/data/xiaoai_bridge
 BOOT=/data/xiaoai_boot.sh
 CRON=/data/etc/crontabs/root
