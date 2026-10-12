@@ -41,6 +41,17 @@ def test_adapter_is_sibling_and_fail_closed_on_unknown_source():
         prepare_listener(SYNTHETIC.replace("SAVED_VOL=", "UNKNOWN="))
 
 
+def test_listener_adapter_rejects_other_or_background_led_modes():
+    for command in (
+        "/bin/show_led 10",
+        "/bin/show_led 0",
+        "/bin/show_led 1 &",
+        "/bin/show_led 1\n/bin/show_led 1",
+    ):
+        with pytest.raises(ValueError, match="verified standalone wake LED"):
+            prepare_listener(SYNTHETIC.replace("/bin/show_led 1", command))
+
+
 def test_all_shipped_scripts_are_valid_posix_shell():
     for file in (ROOT / "speaker").rglob("*.sh"):
         subprocess.run(["sh", "-n", str(file)], check=True)

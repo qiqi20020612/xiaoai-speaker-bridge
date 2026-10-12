@@ -32,9 +32,13 @@ def prepare_listener(source: str) -> str:
         "# Set lower rate if cannot convert later",
         ". /data/xiaoai_bridge/lib/listener-hooks.sh\n\n# Set lower rate if cannot convert later",
     )
-    source = exactly_once(
-        source, "/bin/show_led 1", "# Wake LED is handled before snapshot in bridge_voice_begin"
+    source, count = re.subn(
+        r"(?m)^[ \t]*/bin/show_led[ \t]+1[ \t]*$",
+        "# Wake LED is handled before snapshot in bridge_voice_begin",
+        source,
     )
+    if count != 1:
+        raise ValueError("Expected one verified standalone wake LED command")
     source, count = re.subn(r"(?m)^(SAVED_VOL=.*)$", r"bridge_voice_begin || exit 1\n\1", source)
     if count != 1:
         raise ValueError("Expected one volume snapshot before attenuation")
