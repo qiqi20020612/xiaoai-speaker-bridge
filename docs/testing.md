@@ -15,8 +15,9 @@ CI 使用 Python 3.14、Home Assistant 2026.10.0、官方 HA fixture 的 custom-
 | `test_text_pipeline.py` | 实际 shell + 真实 curl/本机 HTTP；服务端核对 Agent/Conversation ID、语音↔文字同缓存、滑动/过期、覆盖/无上下文、401 原续期与有界重试、失败不续期/不重复、silent reply、临时音量取消恢复 |
 | `test_boot.py` | 原 stop 先返回、进程随后退出；只 stop Squeezelite，done/失败重试 |
 | `test_busybox.py` | 实际 BusyBox 明确拒绝 `-w`；所有调用的参数契约、FD 生命周期、超时/释放/重试、并行临界区互斥 |
-| `test_install.py` | 真实安装器在合成文件系统上模拟启动失败、boot/Cron恢复、身份保持和重试、旧无标记备份/目录切换、缺配置/二进制的回滚/幂等卸载、升级失败、Cron/listener reload失败续跑、boot锁竞态、原配置值保留 |
+| `test_install.py` | 真实安装器在合成文件系统上模拟启动失败、boot/Cron恢复、身份保持和重试、旧无标记备份/目录切换、缺配置/二进制的回滚/幂等卸载、升级失败、Cron/listener reload失败续跑、boot锁竞态、原配置值保留；包/已安装/retry 适配器格式和哈希校验、重复 LED/错误 hook 顺序拒绝、相同包不能绕过、活跃 LED 保护兼容检查 |
 | `test_adapters.py` | source 顺序/锚点、保留 KWS、未知版本拒绝、LED 避让、所有脚本 `sh -n` |
+| `test_release.py` | 三端版本/tag、ARM EABI5 hard-float/静态 ELF、包内外 SHA256、已有 Release/草稿拒绝覆盖；上传/下载失败或损坏附件不公开，网络失败不写入 |
 | `json_test.c` | ASan/UBSan，严格 JSON、嵌入 NUL、坏 UTF-8/代理对/重复 key |
 
 测试替身都明确标记 synthetic，未包含任何本机原配置或用户语音。最终每次实际执行的数量和时间以 [CI](https://github.com/qiqi20020612/xiaoai-speaker-bridge/actions)及 JUnit 产物为准。

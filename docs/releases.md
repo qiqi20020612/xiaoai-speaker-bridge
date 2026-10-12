@@ -2,13 +2,13 @@
 
 固定下载入口：[Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases)。HACS 仓库更新方式不变，HA ZIP 用于手工安装。
 
-维护者确定下一版本后，同时更新 `pyproject.toml`、HA `manifest.json` 和 C `VERSION`。本轮保持 0.1.3，不创建或冒称已发布 0.1.4。正式版本使用 `vX.Y.Z`，预发布使用 `vX.Y.Z-alpha.N`、`-beta.N` 或 `-rc.N`，三个版本字段均须与 tag 的无 v 部分一致。
+本次正式版本为 **0.1.4**，`pyproject.toml`、HA `manifest.json` 和 C `VERSION` 同步更新。正式版本使用 `vX.Y.Z`，预发布使用 `vX.Y.Z-alpha.N`、`-beta.N` 或 `-rc.N`，三个版本字段均须与 tag 的无 v 部分一致。
 
 推送已有 `v*` tag 后，CI 在 tag 的同一提交执行 Python/元数据/隐私/ShellCheck、原生 C 与 ASan/UBSan、真实 BusyBox ash 测试、ARM 静态交叉编译/ELF 检查/QEMU CLI、HACS 和 hassfest。全部通过后才运行发布 job。普通分支或 PR 构建不会发布。
 
 手动发布在 Actions 的 CI 页面选择 `workflow_dispatch`，填写已存在的 release_tag，并明确勾选 publish。所有构建/检查均 checkout 该 tag，发布前再次检查 HEAD 对应 tag、三个版本一致、正式/预发布 channel 一致。未勾选 publish 只构建；release_tag 留空也不发布。
 
-只有 release job 具有 `contents: write`，其余 job 保持只读。每个第三方 Action 固定完整 SHA。tag 通过环境变量传递，经过严格版本校验，不拼成 shell 指令。发布前查询已有 Release；正式、预发布、草稿均拒绝覆盖。网络/API 错误也中止。新 Release 先以草稿上传完整 Assets，成功后才发布；失败遗留的草稿须维护者检查后手动处理，工作流不自动删除或覆盖。建议仓库开启 GitHub Release immutability 和 tag 保护。
+只有 release job 具有 `contents: write`，其余 job 保持只读。每个第三方 Action 固定完整 SHA。tag 通过环境变量传递，经过严格版本校验，不拼成 shell 指令。发布前查询已有 Release；正式、预发布、草稿均拒绝覆盖。网络/API 错误也中止。新 Release 先以草稿上传完整 Assets，再下载草稿附件，核验附件集合、内外 SHA256、ABI 和版本，全部成功后才发布；失败遗留的草稿须维护者检查后手动处理，工作流不自动删除或覆盖。建议仓库开启 GitHub Release immutability 和 tag 保护。
 
 Assets：
 

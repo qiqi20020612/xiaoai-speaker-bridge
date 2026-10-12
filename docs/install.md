@@ -39,7 +39,11 @@ python3 speaker/tools/prepare_adapters.py \
 3. 原 `/data/listener` 在执行时加载，因此 Agent、OAuth token 刷新与 TTS 参数没有被复制到新版配置。
 4. LED `draw()` 和后台 worker 在语音活动时退让；自派生 worker 仍位于桥接同一端。
 
+0.1.4 的 `review.json` 为 format=2，包含 Listener hooks/LED guard 兼容版本。安装器和启用工具都检查原始/输出 SHA256、wake hook 顺序以及无残留 LED 命令；旧 format=1 不静默沿用，要求用本版工具重新生成。
+
 审核通过后，将私有生成目录放入**本机私有部署副本** `xiaoai_bridge/adapter/`。不要上传这份混合了本机原脚本的副本。通用包的 `SHA256SUMS` 核验通用文件；`review.json` 单独核验私有生成文件。
+
+若已经启用旧 AirPlay LED 保护，升级预览可能提示 active guard 与新副本不匹配。此时先运行**仍在工作的旧安装目录** `tools/activate_airplay_led.sh --remove` 恢复原 LED 程序，再安装新包；升级后按第 5 节审核启用新版保护。不要在旧保护仍引用旧 review 时直接替换其适配副本。升级期间保持 `verified.task_led=false`，只在新版保护验证后开启；该开关默认关闭，不改变旧手动灯光验证。
 
 ## 3. 日后在 LX06 上预览及安装
 
@@ -56,7 +60,7 @@ sh /tmp/xiaoai_bridge/install.sh --apply
 安装器：
 
 - 验证通用包 SHA256，保存原 boot、Cron 和已有 bridge 的不可变快照；备份有明确事务状态，已完成/恢复的旧备份以唯一名称保留，不覆盖。
-- 原子切换 `/data/xiaoai_bridge/`，新安装生成一次随机设备 UUID 与 64 位十六进制桥接令牌；升级保留原配置和私有适配。
+- 原子切换 `/data/xiaoai_bridge/`，新安装生成一次随机设备 UUID 与 64 位十六进制桥接令牌；升级保留原配置，只沿用已符合本版校验的私有适配；不兼容时明确拒绝并要求重新生成。
 - 保留所有原 Cron 行，只去重并补充标准 boot 行；更新已有 `/data/xiaoai_boot.sh`，不另建启动服务。
 - 不改只读固件；不关闭 Snapclient/upmpdcli；不清除已完成的 boot 标志，也不因为升级重复停用临时手动开启的 Squeezelite。
 - 启动固定 `start.sh` 并检查 `/api/health` 就绪；失败时返回非零，自动恢复原 boot 和自己的 Cron 变更，并保留失败副本、设备身份和配置以供重试。恢复失败会标记 `recovery_required`，要求先运行新版 `--rollback`。
@@ -65,7 +69,7 @@ sh /tmp/xiaoai_bridge/install.sh --apply
 
 0.1.3 的每次 probe 允许 15 秒，超时只终止自己的 worker 进程组，最多再等 5 秒退出。首次探测失败后等待 1、2 秒进行两次重试；`start.sh` 最多等待 75 秒，足够容纳三次探测及退出宽限。已有桥接进程尚在初始化时等待同一个实例；首次成功 probe 前 HTTP 健康状态仍为 503。连续三次失败或进程退出才触发失败恢复；其余未就绪情况到启动截止时间后失败。C 服务单独运行时，在首次重试耗尽后仍按 15 秒间隔继续探测，不自行影响原服务。
 
-**当前 0.1.2 已成功安装时，直接用完整 0.1.3 包执行 `--dry-run`、`--apply` 升级**，配置、身份和私有适配保留。若新安装自动恢复为 `failed_restored`，先保存 `/tmp/xiaoai_bridge.log` 及 `.log.1` 并检查诊断，可直接重试 `--apply`；`recovery_required` 则先用同一完整包 `--rollback`。不要手工删除备份或覆盖原 listener/Agent 配置。
+**从 0.1.3 或更早版本升级到 0.1.4 时，先重新生成并审阅私有适配副本，再用完整包执行 `--dry-run`、`--apply`**。配置、身份和兼容私有副本保留。若新安装自动恢复为 `failed_restored`，先保存 `/tmp/xiaoai_bridge.log` 及 `.log.1` 并检查诊断，可直接重试 `--apply`；`recovery_required` 则先用同一完整包 `--rollback`。不要手工删除备份或覆盖原 listener/Agent 配置。
 
 新包首次启动默认不启用语音副本。原 listener 继续运行；在 voice hooks 未就绪时，播报/远程对话和可能被旧恢复覆盖的主/蓝牙音量写入会明确受限。随后必须完成共享入口启用，不能把这种保护状态当成功能验收。
 
@@ -134,6 +138,8 @@ sh /tmp/xiaoai_bridge/install.sh --uninstall
 卸载 HA 集成只停止 HA 端任务和订阅。音箱原语音依然工作。如需同时卸载 LX06 bridge，先用上述安装器恢复 adapter，再删除 HA 集成。**不要先手工删除 bridge 文件，否则仍被原启动链/LED 引用的 helper 会缺失。**
 
 ## 8. 从 0.1.0 的 BusyBox 启动失败状态恢复
+
+新版适配兼容检查只约束 `--dry-run`/`--apply` 与重新启用，不阻止 `--rollback`/`--uninstall` 恢复旧失败事务。旧 adapter 导致预览拒绝时，先用完整新版包回滚/卸载，再从未修改原始副本生成并审阅新版 adapter 后重试安装。
 
 适用于 `--apply` 已写 boot/Cron，但 `flock: invalid option -- 'w'` 导致启动失败的现场。使用 **0.1.1 或之后成功 CI 的完整通用包**，不要再运行旧安装目录中的停止/回滚脚本，也不要先删备份、配置或手工改 Cron。
 

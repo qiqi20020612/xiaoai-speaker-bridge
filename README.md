@@ -70,13 +70,13 @@ HACS 添加本仓库为 **Integration** 自定义仓库并安装，重启 HA，�
 
 HACS 安装布局与本地 `brand/` 资源遵循 [HACS Integration 要求](https://www.hacs.xyz/docs/publish/integration/) 和 [HA 集成文件结构](https://developers.home-assistant.io/docs/creating_integration_file_structure/)。HACS 只安装 HA 端。安装包固定下载入口是 [GitHub Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases)；尚未发版的构建可从 [CI](https://github.com/qiqi20020612/xiaoai-speaker-bridge/actions/workflows/ci.yml) 获取。仅声明已测 LX06/ARM EABI5 hard-float 兼容，音箱包须由用户审阅部署。
 
-下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS` 到同一目录，执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）。`v*` tag 经全部 CI 后才创建新 Release；手动发布也重新构建、严格校验，不能覆盖已有正式/预发布或草稿。维护者发版流程见[发布说明](docs/releases.md)。当前版本字段仍为 0.1.3，本轮未创建新版 tag 或发布 Release。
+下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS` 到同一目录，执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）。`v*` tag 经全部 CI 后才创建新 Release；手动发布也重新构建、严格校验，不能覆盖已有正式/预发布或草稿。维护者发版流程见[发布说明](docs/releases.md)。本次正式版本为 **0.1.4**；草稿附件上传后会下载复核，全部通过后才公开。
 
 音箱安装器默认 `--dry-run`。原配置不会被通用模板替换；共享语音入口需要从本机实际 launcher 生成私有副本，并另行启用一行引导。LED 协调通过审阅既有 LED 程序的守护补丁实现，**不修改 Shairport 配置或软件音量曲线**。详情和移除方法见安装文档。
 
 ## 调用示例
 
-设备页面增加非敏感播报/对话文本输入及发送按钮，只有点击发送才执行；回复播报和共享上下文开关默认开启。**原生文本状态可能进入 HA 历史、日志、服务事件和自动化；发送后清空不删除历史。** 输入前阅读[隐私与 Recorder 排除](docs/acceptance-fixes.md#文本输入隐私)。背景音乐避让默认关闭，须同时验证音箱实际 AirPlay/mysoftvol 路由并开启 HA 选项。
+设备页面增加非敏感播报/对话文本输入及发送按钮，只有点击发送才执行；回复播报和共享上下文开关默认开启。**原生文本状态可能进入 HA 历史、日志、服务事件和自动化；发送后清空不删除历史。** 输入前阅读[隐私与 Recorder 排除](docs/acceptance-fixes.md#文本输入隐私)。背景音乐避让默认关闭，须同时验证音箱实际 AirPlay/mysoftvol 路由并开启 HA 选项。远程灯效另需 `verified.task_led=true`，默认关闭，已有手动 LED 验证不会自动启用它。
 
 将实体 ID 换成实际设备的 ID。主动播报和对话是不同动作：
 

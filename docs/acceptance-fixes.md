@@ -1,4 +1,4 @@
-# 0.1.3 验收问题修复与复验
+# 0.1.4：0.1.3 验收问题修复与复验
 
 本轮基于用户 2026-10-12 的 LX06 验收记录。用户已验证语音、上下文、AirPlay、音量、抢占/取消/队列/幂等和重启链路；空闲主进程 RSS/HWM 380 KB、31 分钟内稳定的记录不代表短寿命 worker 或负载峰值。本轮开发未连接或修改音箱。
 
@@ -21,7 +21,7 @@
 
 HA 队列中的 queued/accepted 仅显示任务状态，不抢占当前声音的灯。设备工作时 processing 为橙色；调用原 TTS 时 synthesizing 为紫色；只有检测到该 TTS 的 miplay 后代才显示蓝色 playing。无回复播报的文字任务只有处理灯。完成、失败、取消走同一清理，恢复此前命令灯或重放经过适配的原 AirPlay 音量灯。语音持有同一 LED 锁并优先让远程任务退让。
 
-默认 `verified.led=false`；只有用户确认该型号的真实 sysfs 原语和原 LED 程序，并审阅新版 airplay-led 私有副本后才启用。测试使用临时文件，不等价于 LX06 灯效验收。
+默认 `verified.task_led=false`，独立于原有手动灯光 `verified.led`。只有用户确认该型号的真实 sysfs 原语、审核并启用新版 airplay-led 私有副本后，才同时设置 `verified.led=true`、`verified.task_led=true`。已有手动灯光配置升级后不会自动启用远程灯效。测试使用临时文件，不等价于 LX06 灯效验收。
 
 ## 音乐避让
 
@@ -65,12 +65,14 @@ task_begin→task_parsed 测本地解析；session_wait→session_ready 测锁�
 
 本地模拟测试覆盖来源组合、一次 jq 启动、亮灯先于受控延迟快照、上下文/401 续期、恢复与并发；真实模型/STT/TTS 网络、音箱录音启动时间和负载峰值未测。本轮不以模拟结果声明真机提速。
 
-可复现的工作站实验：`python3 tools/benchmark_snapshot.py --baseline origin/main --jq-delay 0.03 --samples 3`。对空闲/AirPlay/蓝牙/MPD/多来源分别注入每次 jq 30 ms 延迟，旧版中位数约 0.100～0.122 秒，新版约 0.057～0.070 秒；每次 jq 2→1，五种路由输出相符。这是**带受控延迟的 macOS 合成实验**，用于验证 fork 减少的收益方向，不能替代 LX06 或实际网络测量。每次实验应保存自己的结果，不使用这些数字推算真机总耗时。
+可复现的工作站实验：`python3 tools/benchmark_snapshot.py --baseline dbc77b643bfbf7871814752112be1a30b382926e --jq-delay 0.03 --samples 3`。对空闲/AirPlay/蓝牙/MPD/多来源分别注入每次 jq 30 ms 延迟，旧版中位数约 0.100～0.122 秒，新版约 0.057～0.070 秒；每次 jq 2→1，五种路由输出相符。这是**带受控延迟的 macOS 合成实验**，用于验证 fork 减少的收益方向，不能替代 LX06 或实际网络测量。每次实验应保存自己的结果，不使用这些数字推算真机总耗时。
 
 ## 手动升级与复验
 
-通过 [Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases) 下载包并校验 SHA256。重新生成私有 listener/airplay-led 副本并检查 diff/hash；放入解压包的 adapter 后执行 `install.sh --dry-run`、`--apply`。原配置和 UUID/token 被保留。升级后的 HA 配置可直接使用旧选项，不需重新配对。
+通过 [Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases) 下载 0.1.4 包并校验 SHA256。用本版工具从保存的未修改原脚本重新生成私有 listener/airplay-led 副本并检查 diff/hash；放入解压包的 adapter 后执行 `install.sh --dry-run`、`--apply`。安装器只沿用 review format=2、hooks revision=2、原始/输出哈希和 hook 顺序均匹配且不残留 show_led 调用的副本；否则在替换文件/重启服务前明确要求重新生成，相同包重装也校验。原配置和 UUID/token 被保留。升级后的 HA 配置可直接使用旧选项，不需重新配对。
 
-回滚使用同一完整包的 `install.sh --rollback`；HA 回退版本后重启。新增实体可能不可用，保留它们的 registry 供以后恢复，不改旧 ID。没有强制修改版本号或创建 tag；下一版由维护者确定，三个版本字段必须一起更新后再推送 v* tag。
+已启用的旧 AirPlay LED 保护若与新版副本不匹配，先用旧安装目录的 `tools/activate_airplay_led.sh --remove` 恢复原程序，升级后再审核启用新版保护。升级时保持 `verified.task_led=false`；只有新版保护已启用并完成验证后才开启。
+
+回滚使用同一完整包的 `install.sh --rollback`；HA 回退版本后重启。新增实体可能不可用，保留它们的 registry 供以后恢复，不改旧 ID。0.1.4 的三个版本字段同步更新，正式 tag 必须指向通过完整 CI 的合并提交。本轮发布不执行真机部署。
 
 按用户原验收脚本复跑 E1～E5、G4～G8、H1～H5；再检查重启、空闲 ≥31 分钟与实际负载峰值/短寿命 worker/原 listener/整机资源。MPD 队列/控制及其他机型另行实测。
