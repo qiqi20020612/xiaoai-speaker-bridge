@@ -49,9 +49,14 @@
         "data": {
           "idle_policy": "空闲音量对象",
           "poll_interval": "健康检查间隔（秒）",
-          "source_priority": "音源优先级"
+          "source_priority_1": "音源优先级 1",
+          "source_priority_2": "音源优先级 2",
+          "source_priority_3": "音源优先级 3"
         }
       }
+    },
+    "error": {
+      "invalid_source_priority": "三个音源必须各选择一次"
     }
   },
   "entity": {

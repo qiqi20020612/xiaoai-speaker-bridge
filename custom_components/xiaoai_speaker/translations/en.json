@@ -49,9 +49,14 @@
         "data": {
           "idle_policy": "Idle volume target",
           "poll_interval": "Health poll interval (seconds)",
-          "source_priority": "Source priority"
+          "source_priority_1": "Source priority 1",
+          "source_priority_2": "Source priority 2",
+          "source_priority_3": "Source priority 3"
         }
       }
+    },
+    "error": {
+      "invalid_source_priority": "Choose each of the three sources exactly once"
     }
   },
   "entity": {

@@ -208,10 +208,20 @@ for language, catalog, index in [("en", EN, 0), ("zh-Hans", ZH, 1)]:
                         "poll_interval": "健康检查间隔（秒）"
                         if zh
                         else "Health poll interval (seconds)",
-                        "source_priority": "音源优先级" if zh else "Source priority",
+                        **{
+                            f"source_priority_{i}": f"音源优先级 {i}"
+                            if zh
+                            else f"Source priority {i}"
+                            for i in range(1, 4)
+                        },
                     },
                 }
-            }
+            },
+            "error": {
+                "invalid_source_priority": "三个音源必须各选择一次"
+                if zh
+                else "Choose each of the three sources exactly once"
+            },
         },
         "entity": {
             platform: {key: {"name": name} for key, name in values.items()}

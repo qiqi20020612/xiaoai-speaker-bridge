@@ -9,7 +9,14 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .client import AuthenticationError, BridgeClient, BridgeError, validate_host
-from .const import DEFAULT_MPD_PORT, DEFAULT_POLL, DEFAULT_PORT, DOMAIN, IDLE_POLICIES
+from .const import (
+    DEFAULT_MPD_PORT,
+    DEFAULT_POLL,
+    DEFAULT_PORT,
+    DOMAIN,
+    IDLE_POLICIES,
+    SOURCE_PRIORITY,
+)
 
 
 def schema(defaults: dict) -> vol.Schema:
@@ -115,33 +122,48 @@ class XiaoAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 class XiaoAIOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input=None):
-        if user_input is not None:
-            return self.async_create_entry(
-                title="", data={**self.config_entry.options, **user_input}
-            )
+        errors = {}
         opts = self.config_entry.options
+        priority = opts.get("source_priority", list(SOURCE_PRIORITY))
+        if (
+            not isinstance(priority, list)
+            or len(priority) != 3
+            or set(priority) != set(SOURCE_PRIORITY)
+        ):
+            priority = list(SOURCE_PRIORITY)
+        defaults = {
+            **opts,
+            **{f"source_priority_{i + 1}": source for i, source in enumerate(priority)},
+        }
+        if user_input is not None:
+            priority = [user_input.get(f"source_priority_{i}") for i in range(1, 4)]
+            if any(source not in SOURCE_PRIORITY for source in priority) or len(set(priority)) != 3:
+                errors["base"] = "invalid_source_priority"
+                defaults.update(user_input)
+            else:
+                data = {**opts, **user_input, "source_priority": priority}
+                for i in range(1, 4):
+                    data.pop(f"source_priority_{i}", None)
+                return self.async_create_entry(title="", data=data)
         return self.async_show_form(
             step_id="init",
+            errors=errors,
             data_schema=vol.Schema(
                 {
-                    vol.Required("idle_policy", default=opts.get("idle_policy", "master")): vol.In(
-                        IDLE_POLICIES
-                    ),
                     vol.Required(
-                        "poll_interval", default=opts.get("poll_interval", DEFAULT_POLL)
+                        "idle_policy", default=defaults.get("idle_policy", "master")
+                    ): vol.In(IDLE_POLICIES),
+                    vol.Required(
+                        "poll_interval", default=defaults.get("poll_interval", DEFAULT_POLL)
                     ): vol.All(vol.Coerce(int), vol.Range(min=5, max=300)),
-                    vol.Required(
-                        "source_priority",
-                        default=opts.get("source_priority", ["airplay", "bluetooth", "mpd"]),
-                    ): vol.All(
-                        [vol.In(["airplay", "bluetooth", "mpd"])],
-                        vol.Length(min=3, max=3),
-                        lambda v: (
-                            v
-                            if len(set(v)) == 3
-                            else (_ for _ in ()).throw(vol.Invalid("duplicate_sources"))
-                        ),
-                    ),
+                    **{
+                        vol.Required(
+                            f"source_priority_{i}", default=defaults[f"source_priority_{i}"]
+                        ): selector.SelectSelector(
+                            selector.SelectSelectorConfig(options=list(SOURCE_PRIORITY))
+                        )
+                        for i in range(1, 4)
+                    },
                 }
             ),
         )
