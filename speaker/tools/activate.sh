@@ -9,6 +9,10 @@ LINE='. /data/xiaoai_bridge/lib/bootstrap.sh'
 MODE=${1:---dry-run}
 case "$MODE" in --dry-run|--apply|--remove) ;; *) exit 2 ;; esac
 [ -r "$CONFIG" ] || exit 1
+if [ "$MODE" != --remove ];then
+    . "$DIR/lib/adapter-check.sh"
+    bridge_check_adapter_directory "$DIR/adapter" /data/porcupine_launcher_kws || exit 1
+fi
 if [ "$MODE" = --dry-run ]; then
     printf '%s\n' 'Proposed listener change: add one bridge include immediately before the existing KWS bootstrap.'
     printf '%s\n' 'Existing KWS, STT, OAuth, Agent, TTS and AirPlay values remain verbatim.'

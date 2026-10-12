@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tarfile
+import tempfile
 import tomllib
 import zipfile
 from pathlib import Path
@@ -167,6 +168,20 @@ def publish(tag, output, repository, channel="auto"):
         ],
         check=True,
     )
+    # Check the uploaded draft too. A failed/incomplete upload stays unpublished.
+    with tempfile.TemporaryDirectory(prefix="xiaoai-release-check-") as temporary:
+        downloaded = Path(temporary)
+        subprocess.run(
+            ["gh", "release", "download", tag, "--repo", repository, "--dir", temporary],
+            check=True,
+        )
+        if {file.name for file in downloaded.iterdir()} != {file.name for file in assets} | {
+            "SHA256SUMS"
+        }:
+            raise ValueError("Draft release assets are incomplete or unexpected")
+        verify_assets(downloaded, tag[1:])
+        if (downloaded / "SHA256SUMS").read_bytes() != (output / "SHA256SUMS").read_bytes():
+            raise ValueError("Uploaded draft differs from checked assets")
     subprocess.run(
         [
             "gh",

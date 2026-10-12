@@ -844,7 +844,8 @@ bridge_feedback_end
     assert not (path / "xiaoai_bridge.feedback").exists()
 
 
-def test_silent_remote_text_has_processing_but_no_speech_phases(text_device):
+@pytest.mark.parametrize("task_led", [None, False, True])
+def test_silent_remote_text_has_opt_in_processing_but_no_speech_phases(text_device, task_led):
     call, path, env = text_device
     led = path / "led_rgb"
     led.write_text("")
@@ -853,11 +854,13 @@ def test_silent_remote_text_has_processing_but_no_speech_phases(text_device):
     config = path / "config.json"
     values = json.loads(config.read_text())
     values["verified"] = {"led": True}
+    if task_led is not None:
+        values["verified"]["task_led"] = task_led
     config.write_text(json.dumps(values))
     result, _ = call("send_text", "test", speak_response=False)
     assert result.returncode == 0
     assert "synthesizing" not in result.stdout and "playing" not in result.stdout
-    assert led.read_text().strip() == "17 0"
+    assert led.read_text().strip() == ("17 0" if task_led else "")
     assert not (path / "xiaoai_bridge.feedback").exists()
 
 

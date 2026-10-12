@@ -9,6 +9,10 @@ BACKUP=/data/airplay_volume_led.bak.xiaoai_bridge
 CANDIDATE=$DIR/adapter/airplay-led.sh
 MODE=${1:---dry-run}
 case "$MODE" in --dry-run|--apply|--remove) ;; *) exit 2 ;; esac
+if [ "$MODE" != --remove ];then
+    . "$DIR/lib/adapter-check.sh"
+    bridge_check_adapter_directory "$DIR/adapter" /data/porcupine_launcher_kws || exit 1
+fi
 [ -r "$DIR/adapter/review.json" ] && [ -x "$CANDIDATE" ] || exit 1
 expected=$(jq -er '.files["airplay-led.sh"].source_sha256' "$DIR/adapter/review.json")
 reviewed=$(jq -er '.files["airplay-led.sh"].output_sha256' "$DIR/adapter/review.json")

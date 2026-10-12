@@ -2,9 +2,12 @@
 
 import hashlib
 import json
+import shutil
 import struct
+import subprocess
 import tarfile
 import zipfile
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -115,15 +118,58 @@ def test_publish_refuses_existing_release_and_uses_verified_draft(assets):
         run.assert_not_called()
     with (
         patch("tools.release.subprocess.check_output", return_value="[[]]"),
-        patch("tools.release.subprocess.run") as run,
+        patch("tools.release.subprocess.run", side_effect=download_draft(assets)) as run,
     ):
         publish(tag, assets, "example/repo")
-        create, finish = [call.args[0] for call in run.call_args_list]
+        create, download, finish = [call.args[0] for call in run.call_args_list]
         assert "--draft" in create and "--verify-tag" in create
         assert "--notes-file" in create
+        assert download[:3] == ["gh", "release", "download"]
         assert "--draft=false" in finish and "--prerelease=false" in finish
     with pytest.raises(ValueError, match="channel"):
         publish(tag, assets, "example/repo", "prerelease")
+
+
+def download_draft(assets, failure=None):
+    def run(command, **kwargs):
+        action = command[2]
+        if failure == action:
+            raise subprocess.CalledProcessError(1, command)
+        if action == "download":
+            output = Path(command[command.index("--dir") + 1])
+            for file in assets.iterdir():
+                if failure != "missing" or file.name != "SHA256SUMS":
+                    shutil.copy2(file, output / file.name)
+            if failure == "corrupt":
+                next(output.glob("*.zip")).write_bytes(b"incomplete upload")
+        return subprocess.CompletedProcess(command, 0)
+
+    return run
+
+
+@pytest.mark.parametrize("failure", ["create", "download", "missing", "corrupt"])
+def test_failed_draft_upload_or_download_is_never_published(assets, failure):
+    with (
+        patch("tools.release.subprocess.check_output", return_value="[[]]"),
+        patch("tools.release.subprocess.run", side_effect=download_draft(assets, failure)) as run,
+    ):
+        with pytest.raises((subprocess.CalledProcessError, ValueError)):
+            publish(f"v{version()}", assets, "example/repo")
+        assert not any(call.args[0][2] == "edit" for call in run.call_args_list)
+        assert not any("--clobber" in call.args[0] for call in run.call_args_list)
+
+
+def test_release_lookup_failure_aborts_without_writes(assets):
+    with (
+        patch(
+            "tools.release.subprocess.check_output",
+            side_effect=subprocess.CalledProcessError(1, "gh api"),
+        ),
+        patch("tools.release.subprocess.run") as run,
+    ):
+        with pytest.raises(subprocess.CalledProcessError):
+            publish(f"v{version()}", assets, "example/repo")
+        run.assert_not_called()
 
 
 def test_ci_release_depends_on_all_checks_and_limits_write_token():

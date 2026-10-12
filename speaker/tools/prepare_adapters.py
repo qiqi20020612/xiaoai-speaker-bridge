@@ -39,6 +39,10 @@ def prepare_listener(source: str) -> str:
     )
     if count != 1:
         raise ValueError("Expected one verified standalone wake LED command")
+    if any(
+        "/bin/show_led" in line for line in source.splitlines() if not line.lstrip().startswith("#")
+    ):
+        raise ValueError("Unverified additional LED command; review the original launcher")
     source, count = re.subn(r"(?m)^(SAVED_VOL=.*)$", r"bridge_voice_begin || exit 1\n\1", source)
     if count != 1:
         raise ValueError("Expected one volume snapshot before attenuation")
@@ -109,7 +113,7 @@ def main():
         pairs.append((args.airplay_led, "airplay-led.sh", prepare_airplay_led))
     if args.shairport:
         pairs.append((args.shairport, "shairport-sync.conf", prepare_shairport))
-    metadata = {"format": 1, "files": {}}
+    metadata = {"format": 2, "compatibility": {"listener_hooks": 2}, "files": {}}
     for original, name, transform in pairs:
         before = original.read_text()
         after = transform(before)
@@ -132,6 +136,8 @@ def main():
             "source_sha256": hashlib.sha256(before.encode()).hexdigest(),
             "output_sha256": hashlib.sha256(after.encode()).hexdigest(),
         }
+        if name == "airplay-led.sh":
+            metadata["compatibility"]["airplay_led_guard"] = 2
     path = args.output / "review.json"
     path.write_text(json.dumps(metadata, indent=2) + "\n")
     path.chmod(0o600)
