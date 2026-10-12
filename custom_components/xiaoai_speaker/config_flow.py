@@ -128,6 +128,7 @@ class XiaoAIOptionsFlow(config_entries.OptionsFlow):
         if (
             not isinstance(priority, list)
             or len(priority) != 3
+            or any(not isinstance(source, str) for source in priority)
             or set(priority) != set(SOURCE_PRIORITY)
         ):
             priority = list(SOURCE_PRIORITY)
@@ -164,6 +165,16 @@ class XiaoAIOptionsFlow(config_entries.OptionsFlow):
                         )
                         for i in range(1, 4)
                     },
+                    vol.Optional(
+                        "announce_ducking", default=defaults.get("announce_ducking", False)
+                    ): selector.BooleanSelector(),
+                    vol.Optional(
+                        "announce_duck_volume", default=defaults.get("announce_duck_volume", 10)
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0, max=100, step=1, mode=selector.NumberSelectorMode.SLIDER
+                        )
+                    ),
                 }
             ),
         )

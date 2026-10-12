@@ -733,3 +733,147 @@ def test_silent_remote_text_has_processing_but_no_speech_phases(text_device):
     assert "synthesizing" not in result.stdout and "playing" not in result.stdout
     assert led.read_text().strip() == "17 0"
     assert not (path / "xiaoai_bridge.feedback").exists()
+
+
+def enable_airplay_duck_fixture(path):
+    script(
+        path / "tools/amixer",
+        """#!/bin/sh
+if [ "$1" = get ]; then
+ value=60
+ [ ! -f "$STATE_DIR/mixer-$2" ] || read value < "$STATE_DIR/mixer-$2"
+ printf 'Front Left: 153 [%s%%]\\n' "$value"
+else
+ printf '%s %s\\n' "$2" "$3" >> "$STATE_DIR/mixer-writes"
+ printf '%s\\n' "${3%?}" > "$STATE_DIR/mixer-$2"
+fi
+""",
+    )
+    config = path / "config.json"
+    values = json.loads(config.read_text())
+    values["verified"] = {"announcement_ducking": True}
+    config.write_text(json.dumps(values))
+    script(
+        path / "tools/fake-bridge",
+        """#!/bin/sh
+case "$1" in
+ --snapshot) printf '{"source":"airplay","uncertain":false}\\n' ;;
+ --mpd-state) printf 'stop\\n' ;;
+ --emit) exit 0 ;;
+esac
+""",
+    )
+    script(
+        path / "tools/dbus-send",
+        """#!/bin/sh
+case "$*" in
+ *org.bluez*) printf 'string "State"\\nvariant string "idle"\\n' ;;
+ *) printf 'string "Active"\\nvariant boolean true\\n' ;;
+esac
+""",
+    )
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_announce_duck_restores_master_independently_of_tts(text_device, enabled):
+    call, path, _ = text_device
+    enable_airplay_duck_fixture(path)
+    result, _ = call("announce", "test", volume=45, **({"duck_volume": 10} if enabled else {}))
+    assert result.returncode == 0
+    writes = (path / "mixer-writes").read_text().splitlines()
+    assert writes == (
+        ["notifyvol 45%", "mysoftvol 10%", "notifyvol 60%", "mysoftvol 60%"]
+        if enabled
+        else ["notifyvol 45%", "notifyvol 60%"]
+    )
+    assert not (path / "xiaoai_bridge.duck").exists()
+    assert not (path / "xiaoai_bridge.duck.json").exists()
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_duck_failure_or_finish_uses_new_ha_target(text_device, fail):
+    call, path, _ = text_device
+    enable_airplay_duck_fixture(path)
+    script(
+        path / "existing-tts",
+        f"""#!/bin/sh
+printf '{{"revision":2,"versions":{{"master":2}},"volumes":{{"master":45}}}}' > "$STATE_DIR/xiaoai_bridge.desired.json"
+exit {1 if fail else 0}
+""",
+    )
+    result, _ = call("announce", "test", duck_volume=10)
+    assert (result.returncode != 0) == fail
+    assert (path / "mixer-writes").read_text().splitlines() == ["mysoftvol 10%", "mysoftvol 45%"]
+    assert not (path / "xiaoai_bridge.duck.json").exists()
+
+
+def test_duck_cancel_restores_and_deferred_ha_volume_is_not_applied_early(
+    text_device, speaker_shell
+):
+    _, path, env = text_device
+    enable_airplay_duck_fixture(path)
+    proc = subprocess.Popen(
+        [
+            *speaker_shell,
+            str(path / "bridge/lib/text.sh"),
+            "announce",
+            json.dumps({"text": "test", "duck_volume": 10}),
+        ],
+        env={**env, "TTS_SLEEP": "2"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    assert "synthesizing" in proc.stdout.readline()
+    update = subprocess.run(
+        [*speaker_shell, "-c", f'. "{path / "bridge/lib/common.sh"}";volume_write master 45'],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert update.returncode == 0, update.stderr
+    assert json.loads(update.stdout)["deferred"]
+    assert (path / "mixer-writes").read_text().splitlines() == ["mysoftvol 10%"]
+    proc.terminate()
+    proc.communicate(timeout=6)
+    assert (path / "mixer-writes").read_text().splitlines()[-1] == "mysoftvol 45%"
+    assert not (path / "xiaoai_bridge.duck.json").exists()
+
+
+@pytest.mark.parametrize("cleanup_first", [False, True])
+@pytest.mark.parametrize("new_target", [False, True])
+def test_duck_voice_handoff_preserves_pre_duck_value_in_both_orders(
+    text_device, speaker_shell, cleanup_first, new_target
+):
+    _, path, env = text_device
+    enable_airplay_duck_fixture(path)
+    hooks = path / "bridge/lib/listener-hooks.sh"
+    # Model the two possible volume-lock orders, using the production functions.
+    body = f'''. "{path / "bridge/lib/common.sh"}"
+. "{path / "bridge/lib/ducking.sh"}"
+MODE=announce
+DUCK_VOLUME=10
+DUCK_VERIFIED=true
+bridge_duck_begin
+{"volume_write master 45 >/dev/null" if new_target else ":"}
+printf '%s\\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
+{"bridge_duck_restore" if cleanup_first else ":"}
+. "{hooks}"
+bridge_voice_begin || exit 1
+[ "$BRIDGE_MASTER_SAVED" = {45 if new_target else 60} ] || exit 77
+{":" if cleanup_first else "bridge_duck_restore"}
+SAVED_VOL=$(percent mysoftvol)
+bridge_restore_volume
+'''
+    result = subprocess.run(
+        [*speaker_shell, "-c", body], env=env, capture_output=True, text=True, timeout=8
+    )
+    assert result.returncode == 0, result.stderr
+    assert (path / "mixer-writes").read_text().splitlines() == [
+        "mysoftvol 10%",
+        f"mysoftvol {45 if new_target else 60}%",
+        "bluetooth 60%",
+    ]
+    assert not (path / "xiaoai_bridge.duck.json").exists()

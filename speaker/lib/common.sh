@@ -41,6 +41,13 @@ feedback_busy() {
 
 bridge_led_busy() { voice_busy || feedback_busy; }
 
+duck_busy() {
+    [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.duck" ] || return 1
+    read duck_owner < "$BRIDGE_RUNTIME/xiaoai_bridge.duck" || return 1
+    case "$duck_owner" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$duck_owner" -gt 1 ] && kill -0 "$duck_owner" 2>/dev/null
+}
+
 hooks_ready() {
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" ] || return 1
     read hook_owner < "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" || return 1
@@ -117,7 +124,10 @@ volume_write() (
                 ;;
         esac
         # During recording, preserve attenuation; the listener's safe restore applies the new value.
-        if ! voice_busy || [ "$channel" = tts ] || [ "$channel" = headphone ]; then
+        defer=false
+        voice_busy && case "$channel" in master|bluetooth) defer=true ;; esac
+        duck_busy && [ "$channel" = master ] && defer=true
+        if [ "$defer" = false ]; then
             amixer sset "$mixer" "${level}%" >/dev/null 2>&1 || fail hardware_control_failed
         fi
     fi
@@ -128,6 +138,7 @@ volume_write() (
         '.revision=((.revision // 0)+1) | .volumes[$k]=$v | .versions[$k]=.revision' | atomic_json "$file" || fail state_write_failed
     applied=true
     voice_busy && case "$channel" in master|bluetooth) applied=false ;; esac
+    duck_busy && [ "$channel" = master ] && applied=false
     printf '{"target":"%s","level":%s,"applied":%s,"deferred":%s}\n' \
         "$channel" "$level" "$applied" "$( [ "$applied" = true ] && printf false || printf true )"
 )

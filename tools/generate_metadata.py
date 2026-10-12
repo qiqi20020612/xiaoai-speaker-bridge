@@ -208,6 +208,12 @@ for language, catalog, index in [("en", EN, 0), ("zh-Hans", ZH, 1)]:
                         "poll_interval": "健康检查间隔（秒）"
                         if zh
                         else "Health poll interval (seconds)",
+                        "announce_ducking": "播报时压低已验证的 AirPlay 背景音乐"
+                        if zh
+                        else "Duck verified AirPlay background music during speech",
+                        "announce_duck_volume": "背景音乐避让音量上限（%）"
+                        if zh
+                        else "Background music duck volume ceiling (%)",
                         **{
                             f"source_priority_{i}": f"音源优先级 {i}"
                             if zh

@@ -25,6 +25,13 @@ bridge_voice_begin() {
         BRIDGE_VOICE_REVISION=$(jq -r '.revision // 0' "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
     BRIDGE_BT_SAVED=$(percent bluetooth)
     BRIDGE_MASTER_SAVED=$(percent mysoftvol)
+    if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" ]; then
+        desired='{}'
+        [ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] || desired=$(cat "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
+        transferred=$(printf '%s' "$desired" | jq -r --slurpfile duck "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" 'if (.versions.master // 0)>$duck[0].revision then .volumes.master else $duck[0].saved_master end')
+        [ -z "$transferred" ] || BRIDGE_MASTER_SAVED=$transferred
+        rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.duck" "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json"
+    fi
     BRIDGE_VOICE_VOLUME_SAVED=true
     flock -u 7
     bridge_profile wake_volumes

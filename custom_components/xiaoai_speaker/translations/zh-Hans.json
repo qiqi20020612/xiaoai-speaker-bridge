@@ -49,6 +49,8 @@
         "data": {
           "idle_policy": "空闲音量对象",
           "poll_interval": "健康检查间隔（秒）",
+          "announce_ducking": "播报时压低已验证的 AirPlay 背景音乐",
+          "announce_duck_volume": "背景音乐避让音量上限（%）",
           "source_priority_1": "音源优先级 1",
           "source_priority_2": "音源优先级 2",
           "source_priority_3": "音源优先级 3"

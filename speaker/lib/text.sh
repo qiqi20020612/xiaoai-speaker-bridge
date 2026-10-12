@@ -3,6 +3,7 @@
 set -eu
 . "${XIAOAI_BRIDGE_DIR:-/data/xiaoai_bridge}/lib/common.sh"
 . "$BRIDGE_DIR/lib/task-feedback.sh"
+. "$BRIDGE_DIR/lib/ducking.sh"
 MODE=$1
 REQUEST=$2
 bridge_profile task_begin
@@ -55,6 +56,7 @@ restore_tts_volume() {
 cleanup() {
     trap - HUP INT TERM
     restore_tts_volume || true
+    bridge_duck_restore || true
     bridge_feedback_end || true
     bridge_profile task_cleanup
     if [ "$VOICE_GUARD_ACTIVE" = true ]; then
@@ -129,6 +131,7 @@ speak() {
         amixer sset notifyvol "${override}%" >/dev/null 2>&1 || fail hardware_control_failed
         flock -u 7
     fi
+    bridge_duck_begin
     printf '{"stage":"synthesizing"}\n'
     bridge_feedback_stage synthesizing
     bridge_profile tts_launch
@@ -160,6 +163,7 @@ speak() {
     result=0;wait "$tts_pid" || result=$?
     bridge_profile tts_finished
     restore_tts_volume || result=1
+    bridge_duck_restore || result=1
     [ "$inherited_audio" = true ] || flock -u 8
     return "$result"
 }
