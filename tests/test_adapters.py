@@ -6,25 +6,7 @@ import pytest
 from speaker.tools.prepare_adapters import prepare_airplay_led, prepare_listener
 
 ROOT = Path(__file__).resolve().parents[1]
-SYNTHETIC = """#!/bin/sh
-CONFIG_FILE=/data/listener
-[ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
-set_volume(){ :; }
-# Set lower rate if cannot convert later
-. /data/kws_guard.sh
-while true; do
-kws_guard
-SAVED_VOL=`current_volume`
-set_volume 10
-STT_TEXT="test"
-    if [ "${API_AVAILABLE}" = "1" ]; then
-      intent_run test
-    fi
-    original_conversation
-    fi # INTENT_SUCCESS
-set_volume $SAVED_VOL
-done
-"""
+SYNTHETIC = (ROOT / "tests/synthetic_listener.sh").read_text()
 
 
 def test_adapter_is_sibling_and_fail_closed_on_unknown_source():
@@ -38,6 +20,22 @@ def test_adapter_is_sibling_and_fail_closed_on_unknown_source():
         prepare_listener(transformed)
     with pytest.raises(ValueError):
         prepare_listener(SYNTHETIC.replace("SAVED_VOL=", "UNKNOWN="))
+
+
+def test_listener_adapter_rejects_other_or_background_led_modes():
+    for command in (
+        "/bin/show_led 10",
+        "/bin/show_led 0",
+        "/bin/show_led 1 &",
+        "/bin/show_led 1\n/bin/show_led 1",
+    ):
+        with pytest.raises(ValueError, match="verified standalone wake LED"):
+            prepare_listener(SYNTHETIC.replace("/bin/show_led 1", command))
+
+
+def test_listener_adapter_rejects_additional_led_commands():
+    with pytest.raises(ValueError, match="additional LED command"):
+        prepare_listener(SYNTHETIC.replace("/bin/show_led 1", "/bin/show_led 1\n/bin/show_led 2"))
 
 
 def test_all_shipped_scripts_are_valid_posix_shell():
@@ -56,7 +54,8 @@ draw() {
 /data/airplay_volume_led --worker
 """
     prepared = prepare_airplay_led(source)
-    assert "voice_busy && return 0" in prepared
-    assert "if voice_busy;" in prepared
+    assert "bridge_lock_for 0 6" in prepared
+    assert 'bridge_original_draw "$@"' in prepared
+    assert "if bridge_led_busy;" in prepared
     assert "/data/xiaoai_bridge/adapter/airplay-led.sh --worker" in prepared
     assert "voice_busy" not in source

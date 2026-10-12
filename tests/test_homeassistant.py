@@ -1,9 +1,12 @@
 import asyncio
+import json
 from unittest.mock import AsyncMock, patch
 
+import probatio
 import pytest
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_TOKEN
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import config_validation as cv
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.xiaoai_speaker.client import AuthenticationError
@@ -139,13 +142,79 @@ async def test_options_have_persistent_idle_policy(hass, mock_clients):
     entry.add_to_hass(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["type"] == FlowResultType.FORM
+    json.dumps(
+        probatio.to_field_list(result["data_schema"], custom_serializer=cv.custom_serializer)
+    )
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
             "idle_policy": "tts",
             "poll_interval": 15,
-            "source_priority": ["airplay", "bluetooth", "mpd"],
+            "source_priority_1": "airplay",
+            "source_priority_2": "bluetooth",
+            "source_priority_3": "mpd",
         },
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert entry.options["idle_policy"] == "tts"
+    assert entry.options["source_priority"] == ["airplay", "bluetooth", "mpd"]
+
+
+async def test_options_serialization_order_validation_and_reopen(hass):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=DATA,
+        unique_id="synthetic-speaker",
+        options={"source_priority": ["mpd", "airplay", "bluetooth"], "agent_id": "device_default"},
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    fields = probatio.to_field_list(result["data_schema"], custom_serializer=cv.custom_serializer)
+    json.dumps(fields)
+    assert [
+        field["default"] for field in fields if field["name"].startswith("source_priority_")
+    ] == ["mpd", "airplay", "bluetooth"]
+    values = {
+        "idle_policy": "master",
+        "poll_interval": 10,
+        "source_priority_1": "mpd",
+        "source_priority_2": "mpd",
+        "source_priority_3": "airplay",
+    }
+    failed = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    assert failed["errors"]["base"] == "invalid_source_priority"
+    assert entry.options["source_priority"] == ["mpd", "airplay", "bluetooth"]
+    json.dumps(
+        probatio.to_field_list(failed["data_schema"], custom_serializer=cv.custom_serializer)
+    )
+    values["source_priority_2"] = "bluetooth"
+    saved = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    assert saved["type"] == FlowResultType.CREATE_ENTRY
+    assert entry.options["source_priority"] == ["mpd", "bluetooth", "airplay"]
+    assert entry.options["agent_id"] == "device_default"
+    assert "source_priority_1" not in entry.options
+    reopened = await hass.config_entries.options.async_init(entry.entry_id)
+    fields = probatio.to_field_list(reopened["data_schema"], custom_serializer=cv.custom_serializer)
+    assert [
+        field["default"] for field in fields if field["name"].startswith("source_priority_")
+    ] == ["mpd", "bluetooth", "airplay"]
+
+
+async def test_options_reject_unknown_or_missing_sources(hass):
+    from custom_components.xiaoai_speaker.config_flow import XiaoAIOptionsFlow
+
+    entry = MockConfigEntry(domain=DOMAIN, data=DATA, options={})
+    entry.add_to_hass(hass)
+    flow = XiaoAIOptionsFlow()
+    flow.hass = hass
+    flow.handler = entry.entry_id
+    for values in [
+        {
+            "source_priority_1": "unknown",
+            "source_priority_2": "mpd",
+            "source_priority_3": "airplay",
+        },
+        {},
+    ]:
+        result = await flow.async_step_init(values)
+        assert result["errors"]["base"] == "invalid_source_priority"

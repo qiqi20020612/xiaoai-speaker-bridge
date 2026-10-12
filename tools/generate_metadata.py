@@ -35,11 +35,21 @@ EN = {
         "airplay_active": "AirPlay active",
         "source_uncertain": "Source uncertain",
     },
-    "switch": {"listener": "Listening"},
+    "switch": {
+        "listener": "Listening",
+        "speak_response": "Speak conversation replies",
+        "use_context": "Use shared conversation context",
+    },
+    "text": {
+        "announce_text": "Announcement text (non-sensitive)",
+        "send_text_text": "Conversation text (non-sensitive)",
+    },
     "button": {
         "refresh": "Refresh",
         "reset_context": "Reset conversation",
         "restart_listener": "Restart listening",
+        "announce_send": "Announce entered text",
+        "send_text_send": "Send entered conversation text",
     },
     "select": {"idle_policy": "Idle volume policy", "agent": "Conversation agent"},
     "light": {"led": "LED ring"},
@@ -72,8 +82,22 @@ ZH = {
         "airplay_active": "AirPlay 活跃",
         "source_uncertain": "音源不确定",
     },
-    "switch": {"listener": "语音监听"},
-    "button": {"refresh": "刷新状态", "reset_context": "重置会话", "restart_listener": "重启监听"},
+    "switch": {
+        "listener": "语音监听",
+        "speak_response": "播报对话回复",
+        "use_context": "使用共享会话上下文",
+    },
+    "text": {
+        "announce_text": "播报文本（仅限非敏感内容）",
+        "send_text_text": "对话文本（仅限非敏感内容）",
+    },
+    "button": {
+        "refresh": "刷新状态",
+        "reset_context": "重置会话",
+        "restart_listener": "重启监听",
+        "announce_send": "播报输入文本",
+        "send_text_send": "发送输入对话",
+    },
     "select": {"idle_policy": "空闲音量策略", "agent": "对话代理"},
     "light": {"led": "LED 灯环"},
 }
@@ -208,10 +232,26 @@ for language, catalog, index in [("en", EN, 0), ("zh-Hans", ZH, 1)]:
                         "poll_interval": "健康检查间隔（秒）"
                         if zh
                         else "Health poll interval (seconds)",
-                        "source_priority": "音源优先级" if zh else "Source priority",
+                        "announce_ducking": "播报时压低已验证的 AirPlay 背景音乐"
+                        if zh
+                        else "Duck verified AirPlay background music during speech",
+                        "announce_duck_volume": "背景音乐避让音量上限（%）"
+                        if zh
+                        else "Background music duck volume ceiling (%)",
+                        **{
+                            f"source_priority_{i}": f"音源优先级 {i}"
+                            if zh
+                            else f"Source priority {i}"
+                            for i in range(1, 4)
+                        },
                     },
                 }
-            }
+            },
+            "error": {
+                "invalid_source_priority": "三个音源必须各选择一次"
+                if zh
+                else "Choose each of the three sources exactly once"
+            },
         },
         "entity": {
             platform: {key: {"name": name} for key, name in values.items()}

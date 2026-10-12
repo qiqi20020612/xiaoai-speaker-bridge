@@ -7,16 +7,16 @@ from homeassistant.const import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
 
 from .client import BridgeError
-from .entity import XiaoAIEntity
+from .entity import XiaoAIEntity, register_capability_entities
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
     c = entry.runtime_data.coordinator
-    if c.info.get("capabilities", {}).get("led"):
-        async_add_entities([SpeakerLight(c, "led")])
+    register_capability_entities(entry, async_add_entities, [SpeakerLight(c, "led")])
 
 
 class SpeakerLight(XiaoAIEntity, LightEntity):
+    required_capability = ("led",)
     _attr_translation_key = "led"
     _attr_supported_color_modes = {ColorMode.RGB}
     _attr_color_mode = ColorMode.RGB
@@ -37,6 +37,7 @@ class SpeakerLight(XiaoAIEntity, LightEntity):
         return self.coordinator.data.get("led", {}).get("brightness")
 
     async def async_turn_on(self, **kwargs):
+        self.require_available()
         try:
             await self.coordinator.client.request(
                 "POST",
@@ -53,6 +54,7 @@ class SpeakerLight(XiaoAIEntity, LightEntity):
             raise HomeAssistantError(err.code) from None
 
     async def async_turn_off(self, **kwargs):
+        self.require_available()
         try:
             await self.coordinator.client.request(
                 "POST", "/api/led", {"on": False, "request_id": uuid.uuid4().hex}

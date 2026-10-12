@@ -47,6 +47,9 @@ async def async_get_config_entry_diagnostics(hass, entry):
         },
         "active_source": state.get("active_source"),
         "source_uncertain": state.get("source_uncertain"),
+        "airplay": {
+            k: state.get("airplay", {}).get(k) for k in ("active", "state", "volume", "raw_volume")
+        },
         "last_job_status": c.jobs.last.get("status"),
         "queue_size": c.jobs.queue.qsize(),
     }

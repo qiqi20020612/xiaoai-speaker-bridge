@@ -98,6 +98,23 @@ def test_authentication_and_no_arbitrary_shell(native_bridge):
     assert call("/api/volume", {"target": "master", "level": 30})[0] == 400
 
 
+def test_source_policy_priority_roundtrip_and_invalid_permutations(native_bridge):
+    call, _, runtime, _, _, _ = native_bridge
+    policy = {"source": "airplay", "uncertain": False, "priority": ["bluetooth", "airplay", "mpd"]}
+    assert call("/api/policy", policy)[0] == 200
+    saved = json.loads((runtime / "xiaoai_bridge.source.json").read_text())
+    assert saved["priority"] == policy["priority"]
+    for priority in [
+        ["airplay", "airplay", "mpd"],
+        ["airplay", "mpd"],
+        ["airplay", "other", "mpd"],
+        "mpd",
+        [None, "mpd", "airplay"],
+    ]:
+        assert call("/api/policy", {**policy, "priority": priority})[0] == 400
+        assert json.loads((runtime / "xiaoai_bridge.source.json").read_text()) == saved
+
+
 def test_text_idempotency_busy_and_real_status(native_bridge):
     call, proc, path, *_ = native_bridge
     payload = {"request_id": "text-1", "text": "打开灯", "speak_response": False}

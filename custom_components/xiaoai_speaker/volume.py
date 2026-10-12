@@ -21,18 +21,55 @@ class SourceDecision:
 def choose_source(state: dict, priority: tuple | list = SOURCE_PRIORITY) -> SourceDecision:
     voice = state.get("voice", {})
     if voice.get("active"):
+        observed = voice.get("observed_sources")
+        if isinstance(observed, dict) and set(observed) == set(SOURCE_PRIORITY):
+            # Resolve only the frozen pre-attenuation observations, using the
+            # configured HA priority. Later media state cannot change this route.
+            return choose_source(
+                {
+                    **{s: {"active": observed[s]} for s in SOURCE_PRIORITY},
+                    "state_stale": state.get("state_stale", False),
+                },
+                priority,
+            )
         active = voice.get("active_sources", [])
         source = next((s for s in priority if s in active), voice.get("source"))
-        return SourceDecision(source, voice.get("uncertain", source is None))
+        return SourceDecision(
+            source,
+            bool(
+                state.get("state_stale")
+                or len(active) > 1
+                or voice.get("uncertain", source is None)
+            ),
+        )
     active = []
+    unknown = []
     for source in priority:
         value = state.get(source, {})
-        if value.get("active") or value.get("state") in ("play", "playing", "Playing"):
+        activity = value.get("active")
+        playback = str(value.get("state", "unknown")).lower()
+        if activity is True or (not isinstance(activity, bool) and playback in ("play", "playing")):
             active.append(source)
-    unknown = state.get("state_stale", False) or any(
-        state.get(s, {}).get("state") == "unknown" for s in priority
+        elif not isinstance(activity, bool) and playback not in (
+            "pause",
+            "paused",
+            "stop",
+            "stopped",
+            "idle",
+            "off",
+        ):
+            unknown.append(source)
+    # Confidence concerns the selected source. An unobserved lower-priority
+    # source cannot change that decision; multiple confirmed sources still do.
+    unresolved = (
+        any(priority.index(s) < priority.index(active[0]) for s in unknown)
+        if active
+        else bool(unknown)
     )
-    return SourceDecision(active[0] if active else None, len(active) > 1 or unknown)
+    return SourceDecision(
+        active[0] if active else None,
+        bool(state.get("state_stale") or len(active) > 1 or unresolved),
+    )
 
 
 def resolve_targets(

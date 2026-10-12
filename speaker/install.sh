@@ -3,7 +3,7 @@
 set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 umask 077
-PACKAGE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PACKAGE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 DEST=/data/xiaoai_bridge
 BOOT=/data/xiaoai_boot.sh
 CRON=/data/etc/crontabs/root
@@ -16,8 +16,54 @@ MODE=${1:---dry-run}
 case "$MODE" in --dry-run|--apply|--rollback|--uninstall) ;; *) exit 2 ;; esac
 [ "$PACKAGE" != "$DEST" ] || { printf '%s\n' 'Extract the checked recovery package to /tmp before running the installer';exit 1; }
 . "$PACKAGE/lib/locks.sh"
+. "$PACKAGE/lib/adapter-check.sh"
+
+check_install_adapters() {
+    selected_adapter=''
+    selected_config=''
+    for candidate in "$DEST/config.json" "$BACKUP/retry/config.json" "$PACKAGE/config.json";do
+        if [ -r "$candidate" ];then selected_config=$candidate;break;fi
+    done
+    for candidate in "$PACKAGE/adapter" "$DEST/adapter" "$BACKUP/retry/adapter";do
+        if [ -d "$candidate" ];then selected_adapter=$candidate;break;fi
+    done
+    if [ -n "$selected_adapter" ];then
+        bridge_check_adapter_directory "$selected_adapter" /data/porcupine_launcher_kws || return 1
+    elif [ -n "$selected_config" ] && jq -e '.enable_listener_adapter==true' "$selected_config" >/dev/null 2>&1;then
+        bridge_adapter_reject 'Enabled Listener adapter is missing.';return 1
+    fi
+    # An activated older LED copy cannot be silently retained with a new review:
+    # that would race remote feedback and make later removal/rollback unverifiable.
+    led_guard_ready=false
+    if [ -r /data/airplay_volume_led.bak.xiaoai_bridge ] && \
+       ! cmp -s /data/airplay_volume_led.bak.xiaoai_bridge /data/airplay_volume_led;then
+        if [ -n "$selected_adapter" ] && [ -r "$selected_adapter/airplay-led.sh" ] && \
+           cmp -s "$selected_adapter/airplay-led.sh" /data/airplay_volume_led && \
+           [ "$(jq -r '.files["airplay-led.sh"].source_sha256' "$selected_adapter/review.json")" = "$(sha256sum /data/airplay_volume_led.bak.xiaoai_bridge | awk '{print $1}')" ];then
+            led_guard_ready=true
+        else
+            printf '%s\n' 'Active AirPlay LED guard differs from the new private adapter. Run the currently installed tools/activate_airplay_led.sh --remove before upgrading, then regenerate/review and reactivate the new guard after installation.' >&2
+            return 1
+        fi
+    fi
+    if [ -n "$selected_config" ] && jq -e '.verified.task_led==true' "$selected_config" >/dev/null 2>&1 && \
+       [ "$led_guard_ready" != true ];then
+        printf '%s\n' 'Remote task LED requires the new activated AirPlay LED guard. Set verified.task_led=false, upgrade and activate/review the guard before enabling task_led.' >&2
+        return 1
+    fi
+}
+adapters_unchanged() {
+    [ -n "$selected_adapter" ] || { [ ! -d "$DEST/adapter" ];return; }
+    [ -d "$DEST/adapter" ] || return 1
+    for name in listener.sh review.json airplay-led.sh;do
+        if [ -e "$selected_adapter/$name" ] || [ -e "$DEST/adapter/$name" ];then
+            cmp -s "$selected_adapter/$name" "$DEST/adapter/$name" || return 1
+        fi
+    done
+}
 
 if [ "$MODE" = --dry-run ]; then
+    for dependency in jq sha256sum;do command -v "$dependency" >/dev/null 2>&1 || exit 1;done
     [ -x "$PACKAGE/bin/xiaoai_bridge" ] || exit 1
     "$PACKAGE/bin/xiaoai_bridge" --version
     # Probe the actual FD-lock interface without creating files in /data or /tmp.
@@ -26,6 +72,7 @@ if [ "$MODE" = --dry-run ]; then
     flock -u 9
     sh -n "$PACKAGE/start.sh" && sh -n "$PACKAGE/xiaoai_boot.sh"
     for file in "$PACKAGE"/lib/*.sh;do sh -n "$file";done
+    check_install_adapters || exit 1
     printf '%s\n' 'Plan: preserve listener, KWS, Agent, TTS, AirPlay and unrelated Cron tasks.'
     printf '%s\n' 'Plan: snapshot boot/Cron/bridge; restore on failed startup; retain recovery copies.'
     printf '%s\n' 'Plan: BusyBox FD locks with bounded waits; no GNU flock options.'
@@ -236,11 +283,12 @@ for dependency in amixer curl;do command -v "$dependency" >/dev/null 2>&1 || exi
 [ -x "$PACKAGE/bin/xiaoai_bridge" ] && [ -r "$PACKAGE/SHA256SUMS" ] || exit 1
 (cd "$PACKAGE" && sha256sum -c SHA256SUMS >/dev/null) || exit 1
 voice_idle || exit 1
+check_install_adapters || exit 1
 OLD_BACKUP=''
 if [ -d "$BACKUP" ];then
     case "$(phase)" in
         installed)
-            if [ -r "$DEST/SHA256SUMS" ] && cmp -s "$DEST/SHA256SUMS" "$PACKAGE/SHA256SUMS";then
+            if [ -r "$DEST/SHA256SUMS" ] && cmp -s "$DEST/SHA256SUMS" "$PACKAGE/SHA256SUMS" && adapters_unchanged;then
                 service start;printf '%s\n' 'Same checked package already installed';exit 0
             fi ;;
         rolled_back|failed_restored|uninstalled|backup_incomplete) ;;
@@ -313,6 +361,11 @@ fi
 chmod 600 "$STAGE/config.json"
 chmod 700 "$STAGE/start.sh" "$STAGE/bin/xiaoai_bridge" "$STAGE"/lib/*.sh "$STAGE"/tools/*.sh
 "$STAGE/bin/xiaoai_bridge" --config "$STAGE/config.json" --check-config
+if [ -d "$STAGE/adapter" ];then
+    bridge_check_adapter_directory "$STAGE/adapter" /data/porcupine_launcher_kws || exit 1
+elif jq -e '.enable_listener_adapter==true' "$STAGE/config.json" >/dev/null 2>&1;then
+    bridge_adapter_reject 'Enabled Listener adapter is missing from the staged installation.';exit 1
+fi
 service stop
 OLD_STOPPED=true
 # Mark before the first directory move: power loss is recovered from the snapshot.

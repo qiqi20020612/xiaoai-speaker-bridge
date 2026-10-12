@@ -49,9 +49,16 @@
         "data": {
           "idle_policy": "Idle volume target",
           "poll_interval": "Health poll interval (seconds)",
-          "source_priority": "Source priority"
+          "announce_ducking": "Duck verified AirPlay background music during speech",
+          "announce_duck_volume": "Background music duck volume ceiling (%)",
+          "source_priority_1": "Source priority 1",
+          "source_priority_2": "Source priority 2",
+          "source_priority_3": "Source priority 3"
         }
       }
+    },
+    "error": {
+      "invalid_source_priority": "Choose each of the three sources exactly once"
     }
   },
   "entity": {
@@ -127,6 +134,20 @@
     "switch": {
       "listener": {
         "name": "Listening"
+      },
+      "speak_response": {
+        "name": "Speak conversation replies"
+      },
+      "use_context": {
+        "name": "Use shared conversation context"
+      }
+    },
+    "text": {
+      "announce_text": {
+        "name": "Announcement text (non-sensitive)"
+      },
+      "send_text_text": {
+        "name": "Conversation text (non-sensitive)"
       }
     },
     "button": {
@@ -138,6 +159,12 @@
       },
       "restart_listener": {
         "name": "Restart listening"
+      },
+      "announce_send": {
+        "name": "Announce entered text"
+      },
+      "send_text_send": {
+        "name": "Send entered conversation text"
       }
     },
     "select": {

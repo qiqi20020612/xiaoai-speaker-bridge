@@ -2,6 +2,7 @@
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.const import EntityCategory
+from homeassistant.helpers import entity_registry as er
 
 from .entity import XiaoAIEntity
 
@@ -19,11 +20,20 @@ SENSORS = {
     "airplay_raw_volume": ("dB", "mdi:volume-high"),
     "conversation_remaining": ("s", "mdi:chat-outline"),
 }
+LEGACY_SENSORS = frozenset({"bridge_peak_rss", "memory_total", "airplay_raw_volume"})
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
     c = entry.runtime_data.coordinator
-    async_add_entities([StateSensor(c, key) for key in SENSORS])
+    registry = er.async_get(hass)
+    async_add_entities(
+        [
+            StateSensor(c, key)
+            for key in SENSORS
+            if key not in LEGACY_SENSORS
+            or registry.async_get_entity_id("sensor", "xiaoai_speaker", f"{entry.unique_id}_{key}")
+        ]
+    )
 
 
 class StateSensor(XiaoAIEntity, SensorEntity):
@@ -38,13 +48,9 @@ class StateSensor(XiaoAIEntity, SensorEntity):
         self.key = key
         self._attr_translation_key = key
         self._attr_native_unit_of_measurement, self._attr_icon = SENSORS[key]
-        if key not in ("active_source", "job_status"):
+        if key not in ("active_source", "airplay_volume"):
             self._attr_entity_category = EntityCategory.DIAGNOSTIC
-            self._attr_entity_registry_enabled_default = key in (
-                "memory_available",
-                "queue_size",
-                "airplay_volume",
-            )
+            self._attr_entity_registry_enabled_default = False
         if key in (
             "memory_available",
             "memory_total",

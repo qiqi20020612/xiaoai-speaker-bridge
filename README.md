@@ -4,7 +4,7 @@
 
 Home Assistant 2026.10 自定义集成，以及 LX06 `/data` 下的轻量受控端。统一原生媒体播放器、独立音量、智能跟随、主动播报、远程文字对话、监听管理和设备状态。KWS、STT、现有 Conversation Agent、五分钟上下文及原有 TTS 回退链继续由音箱已有脚本执行。
 
-**当前交付的是代码、通用安装包和自动化测试。开发期间音箱只进行了读取，没有部署程序、改变音量、重启服务或修改配置。真机写入验收和资源预算验收仍待执行；自动化测试使用合成设备数据。**
+**用户已于 2026-10-12 在 LX06 完成 0.1.3 核心链路与空闲主进程资源验收。本轮修复仍需用户真机复验；开发未连接、部署或修改设备，自动测试使用合成数据。空闲 RSS/HWM 记录不代表负载和短寿命 worker 峰值。** 本轮范围、隐私、迁移和复验步骤见[验收修复说明](docs/acceptance-fixes.md)。
 
 ## 两端架构
 
@@ -45,7 +45,7 @@ HA 集成直接运行于 HA 内。音箱仅有一个新增 C 常驻进程，硬�
 | LED/IR | 保留高级适配和能力接口；未验证时明确拒绝操作，不出现假按钮 |
 | 开机 | 固定 `/data/xiaoai_boot.sh`，90 秒后仅停 Squeezelite，等待异步退出，启动桥接并确认就绪；Cron 幂等、可重试 |
 
-AirPlay 音量既有只读传感器，也有独立 dB 值；没有通过发送端同步验证时，不会用主音量冒充反向控制。直接 LED 实体为命令回执状态，其他灯效接管后清除旧回执。
+AirPlay 音量具有只读传感器，原始 dB 保留在 API/诊断及已注册的兼容实体；没有通过发送端同步验证时，不会用主音量冒充反向控制。远程灯效仅在验证原语后开启，语音优先。诊断实体的新默认策略保留旧 Entity ID 与用户启用选择。
 
 ## 安装
 
@@ -68,11 +68,15 @@ Cron:  * * * * * /bin/sh /data/xiaoai_boot.sh
 
 HACS 添加本仓库为 **Integration** 自定义仓库并安装，重启 HA，然后在“设置 → 设备与服务”添加 **XiaoAI Speaker Bridge**。填写音箱地址、桥接端口（默认 `8766`）、本地随机桥接令牌，以及 MPD 端口/可选密码。`8766` 与既有 KWS 服务端口分开。多台音箱分别添加，每台有独立设备 UUID、鉴权、音量存储和任务队列。
 
-HACS 安装布局与本地 `brand/` 资源遵循 [HACS Integration 要求](https://www.hacs.xyz/docs/publish/integration/) 和 [HA 集成文件结构](https://developers.home-assistant.io/docs/creating_integration_file_structure/)。HACS 只安装 HA 端。音箱包在 [CI 的 `generic-two-end-packages` 产物](https://github.com/qiqi20020612/xiaoai-speaker-bridge/actions/workflows/ci.yml)中，必须单独审阅和部署；HA 不会自动通过 SSH 刷写。
+HACS 安装布局与本地 `brand/` 资源遵循 [HACS Integration 要求](https://www.hacs.xyz/docs/publish/integration/) 和 [HA 集成文件结构](https://developers.home-assistant.io/docs/creating_integration_file_structure/)。HACS 只安装 HA 端。安装包固定下载入口是 [GitHub Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases)；尚未发版的构建可从 [CI](https://github.com/qiqi20020612/xiaoai-speaker-bridge/actions/workflows/ci.yml) 获取。仅声明已测 LX06/ARM EABI5 hard-float 兼容，音箱包须由用户审阅部署。
+
+下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS` 到同一目录，执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）。`v*` tag 经全部 CI 后才创建新 Release；手动发布也重新构建、严格校验，不能覆盖已有正式/预发布或草稿。维护者发版流程见[发布说明](docs/releases.md)。本次正式版本为 **0.1.4**；草稿附件上传后会下载复核，全部通过后才公开。
 
 音箱安装器默认 `--dry-run`。原配置不会被通用模板替换；共享语音入口需要从本机实际 launcher 生成私有副本，并另行启用一行引导。LED 协调通过审阅既有 LED 程序的守护补丁实现，**不修改 Shairport 配置或软件音量曲线**。详情和移除方法见安装文档。
 
 ## 调用示例
+
+设备页面增加非敏感播报/对话文本输入及发送按钮，只有点击发送才执行；回复播报和共享上下文开关默认开启。**原生文本状态可能进入 HA 历史、日志、服务事件和自动化；发送后清空不删除历史。** 输入前阅读[隐私与 Recorder 排除](docs/acceptance-fixes.md#文本输入隐私)。背景音乐避让默认关闭，须同时验证音箱实际 AirPlay/mysoftvol 路由并开启 HA 选项。远程灯效另需 `verified.task_led=true`，默认关闭，已有手动 LED 验证不会自动启用它。
 
 将实体 ID 换成实际设备的 ID。主动播报和对话是不同动作：
 

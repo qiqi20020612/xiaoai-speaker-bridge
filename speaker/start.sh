@@ -12,7 +12,7 @@ LOG=$RUNTIME/xiaoai_bridge.log
 LOCK=$RUNTIME/xiaoai_bridge.start.lock
 ACTION=${1:-start}
 STARTUP_BUDGET=75
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 . "$SCRIPT_DIR/lib/locks.sh"
 export XIAOAI_BRIDGE_DIR="$DIR" XIAOAI_BRIDGE_RUNTIME="$RUNTIME" XIAOAI_BRIDGE_CONFIG="$CONFIG"
 case "$ACTION" in start|stop|status|restart) ;; *) exit 2 ;; esac

@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,32 @@ def executable(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\n" + text + "\n")
     path.chmod(0o755)
+
+
+def private_adapter(data, output, led=False):
+    original = data / "porcupine_launcher_kws"
+    shutil.copy2(ROOT / "tests/synthetic_listener.sh", original)
+    command = [
+        sys.executable,
+        str(ROOT / "speaker/tools/prepare_adapters.py"),
+        "--listener",
+        str(original),
+        "--output",
+        str(output),
+    ]
+    if led:
+        original_led = data / "airplay_volume_led"
+        original_led.write_text(
+            '#!/bin/sh\ndraw() {\n    :\n}\n    while [ -f "$STATE" ]; do\n        draw\n        break\n    done\n/data/airplay_volume_led --worker\n'
+        )
+        command.extend(["--airplay-led", str(original_led)])
+    subprocess.run(
+        command,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return output / "listener.sh"
 
 
 @pytest.fixture
@@ -51,6 +78,7 @@ if [ "${1:-start}" = start ] && [ -f "$INSTALL_FAIL_START" ];then
 fi""",
     )
     shutil.copy2(ROOT / "speaker/lib/locks.sh", package / "lib/locks.sh")
+    shutil.copy2(ROOT / "speaker/lib/adapter-check.sh", package / "lib/adapter-check.sh")
     executable(package / "lib/device.sh", ":")
     executable(package / "tools/activate.sh", ":")
     (package / "config.example.json").write_text("{}")
@@ -151,23 +179,9 @@ def test_activation_changes_only_one_include_and_keeps_refreshed_values(
         executable(tools / "sha256sum", 'exec shasum -a 256 "$@"')
     shutil.copy2(ROOT / "speaker/lib/common.sh", bridge / "lib/common.sh")
     shutil.copy2(ROOT / "speaker/lib/locks.sh", bridge / "lib/locks.sh")
+    shutil.copy2(ROOT / "speaker/lib/adapter-check.sh", bridge / "lib/adapter-check.sh")
     executable(bridge / "lib/listener-service.sh", ":")
-    original = data / "porcupine_launcher_kws"
-    original.write_text("# Synthetic original launcher\n")
-    candidate = bridge / "adapter/listener.sh"
-    executable(candidate, ":")
-    (bridge / "adapter/review.json").write_text(
-        json.dumps(
-            {
-                "files": {
-                    "listener.sh": {
-                        "source_sha256": hashlib.sha256(original.read_bytes()).hexdigest(),
-                        "output_sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
-                    }
-                }
-            }
-        )
-    )
+    private_adapter(data, bridge / "adapter")
     config = bridge / "config.json"
     config.write_text('{"enable_listener_adapter":false}')
     listener = data / "listener"
@@ -436,6 +450,7 @@ def test_only_enabled_adapter_is_reloaded_to_receive_fixed_shell_functions(insta
     value = json.loads(config.read_text())
     value["enable_listener_adapter"] = True
     config.write_text(json.dumps(value))
+    private_adapter(data, package / "adapter")
     helper = package / "lib/listener-service.sh"
     executable(helper, 'printf "listener-%s\\n" "$1" >> "$INSTALL_CALLS"')
     hashes = package / "SHA256SUMS"
@@ -448,3 +463,145 @@ def test_only_enabled_adapter_is_reloaded_to_receive_fixed_shell_functions(insta
     assert calls.read_text().count("listener-restart") == 1
     assert call("--apply").returncode == 0
     assert calls.read_text().count("listener-restart") == 1
+
+
+@pytest.mark.parametrize("location", ["package", "installed", "retry"])
+@pytest.mark.parametrize("mode", ["--dry-run", "--apply"])
+def test_upgrade_rejects_legacy_adapter_before_mutating_installation(installation, location, mode):
+    call, data, cron, original_cron, original_boot, calls = installation
+    dirs = {
+        "package": data.parent / "package/adapter",
+        "installed": data / "xiaoai_bridge/adapter",
+        "retry": data / "xiaoai_bridge.backup/retry/adapter",
+    }
+    adapter = dirs[location]
+    private_adapter(data, adapter)
+    review = adapter / "review.json"
+    values = json.loads(review.read_text())
+    values["format"] = 1
+    review.write_text(json.dumps(values))
+    if location == "retry":
+        (data / "xiaoai_bridge.backup/status").write_text("failed_restored\n")
+    result = call(mode)
+    assert result.returncode != 0 and "Regenerate and review" in result.stderr
+    assert cron.read_text() == original_cron
+    assert (data / "xiaoai_boot.sh").read_text() == original_boot
+    assert not calls.exists() and not (data / "xiaoai_bridge.new").exists()
+    assert review.read_text() == json.dumps(values)
+    assert not (data / "xiaoai_bridge.backup.retained").exists()
+
+
+@pytest.mark.parametrize("damage", ["hash", "duplicate_led", "order", "source"])
+def test_same_package_cannot_bypass_adapter_compatibility(installation, damage):
+    call, data, cron, original_cron, original_boot, calls = installation
+    private_adapter(data, data.parent / "package/adapter")
+    assert call("--apply").returncode == 0
+    # No package adapter: the installed private copy must be checked even on a no-op upgrade.
+    shutil.rmtree(data.parent / "package/adapter")
+    adapter = data / "xiaoai_bridge/adapter"
+    listener = adapter / "listener.sh"
+    if damage == "source":
+        (data / "porcupine_launcher_kws").write_text("# changed original\n")
+    else:
+        listener.write_text(
+            listener.read_text()
+            + ("/bin/show_led 1\n" if damage == "duplicate_led" else "# change\n")
+        )
+        if damage == "order":
+            listener.write_text(listener.read_text().replace("bridge_voice_begin || exit 1\n", ""))
+        if damage != "hash":
+            review = adapter / "review.json"
+            values = json.loads(review.read_text())
+            values["files"]["listener.sh"]["output_sha256"] = hashlib.sha256(
+                listener.read_bytes()
+            ).hexdigest()
+            review.write_text(json.dumps(values))
+    before = calls.read_text()
+    result = call("--apply")
+    assert result.returncode != 0 and "Regenerate and review" in result.stderr
+    assert "Same checked package" not in result.stdout and calls.read_text() == before
+    assert cron.read_text() == original_cron
+
+
+def test_upgrade_reuses_compatible_adapter_or_explicit_reviewed_replacement(installation):
+    call, data, cron, original_cron, original_boot, calls = installation
+    old = data / "xiaoai_bridge"
+    private_adapter(data, old / "adapter")
+    (old / "config.json").write_text('{"token":"synthetic-stable","enable_listener_adapter":false}')
+    assert call("--dry-run").returncode == 0
+    original = (old / "adapter/listener.sh").read_bytes()
+    assert call("--apply").returncode == 0
+    assert (old / "adapter/listener.sh").read_bytes() == original
+    # An explicit new reviewed package adapter wins over an incompatible retained adapter.
+    (old / "adapter/review.json").write_text('{"format":1}')
+    private_adapter(data, data.parent / "package/adapter")
+    # Even an identical public package must apply a newly reviewed private replacement.
+    assert call("--apply").returncode == 0
+    assert json.loads((old / "adapter/review.json").read_text())["format"] == 2
+    assert json.loads((old / "config.json").read_text())["token"] == "synthetic-stable"
+
+
+def test_enabled_missing_adapter_is_not_silently_installed(installation):
+    call, data, cron, original_cron, original_boot, calls = installation
+    config = data.parent / "package/config.json"
+    config.write_text('{"enable_listener_adapter":true}')
+    for mode in ("--dry-run", "--apply"):
+        result = call(mode)
+        assert result.returncode != 0 and "Enabled Listener adapter is missing" in result.stderr
+    assert not calls.exists() and not (data / "xiaoai_bridge.backup").exists()
+
+
+def test_upgrade_requires_removing_an_incompatible_active_airplay_led_guard(installation):
+    call, data, cron, original_cron, original_boot, calls = installation
+    private_adapter(data, data.parent / "package/adapter")
+    (data / "airplay_volume_led.bak.xiaoai_bridge").write_text("# saved original LED\n")
+    (data / "airplay_volume_led").write_text("# older active LED guard\n")
+    for mode in ("--dry-run", "--apply"):
+        result = call(mode)
+        assert result.returncode != 0 and "--remove before upgrading" in result.stderr
+    assert not calls.exists() and not (data / "xiaoai_bridge.backup").exists()
+
+
+def test_task_led_requires_reviewed_active_airplay_guard_during_upgrade(installation):
+    call, data, cron, original_cron, original_boot, calls = installation
+    config = data.parent / "package/config.json"
+    config.write_text('{"verified":{"task_led":true}}')
+    result = call("--apply")
+    assert result.returncode != 0 and "verified.task_led=false" in result.stderr
+    assert not calls.exists() and not (data / "xiaoai_bridge.backup").exists()
+
+
+@pytest.mark.parametrize("damage", [None, "hash", "lock", "review"])
+def test_airplay_led_review_and_active_guard_are_verified_before_upgrade(installation, damage):
+    call, data, cron, original_cron, original_boot, calls = installation
+    adapter = data.parent / "package/adapter"
+    private_adapter(data, adapter, led=True)
+    candidate = adapter / "airplay-led.sh"
+    review = adapter / "review.json"
+    values = json.loads(review.read_text())
+    if damage == "hash":
+        candidate.write_text(candidate.read_text() + "# changed\n")
+    elif damage == "lock":
+        candidate.write_text(
+            candidate.read_text().replace("bridge_lock_for 0 6", "bridge_lock_for 0 7")
+        )
+        values["files"]["airplay-led.sh"]["output_sha256"] = hashlib.sha256(
+            candidate.read_bytes()
+        ).hexdigest()
+    elif damage == "review":
+        values["compatibility"]["airplay_led_guard"] = 1
+    review.write_text(json.dumps(values))
+    if damage:
+        result = call("--apply")
+        assert result.returncode != 0 and "Regenerate and review" in result.stderr
+        assert not calls.exists() and not (data / "xiaoai_bridge.backup").exists()
+    else:
+        shutil.copy2(data / "airplay_volume_led", data / "airplay_volume_led.bak.xiaoai_bridge")
+        shutil.copy2(candidate, data / "airplay_volume_led")
+        config = data.parent / "package/config.json"
+        config.write_text(
+            '{"enable_listener_adapter":false,"verified":{"led":true,"task_led":true}}'
+        )
+        assert call("--dry-run").returncode == 0
+        assert call("--apply").returncode == 0
+        assert call("--apply").returncode == 0

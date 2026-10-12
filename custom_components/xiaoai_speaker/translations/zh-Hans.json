@@ -49,9 +49,16 @@
         "data": {
           "idle_policy": "空闲音量对象",
           "poll_interval": "健康检查间隔（秒）",
-          "source_priority": "音源优先级"
+          "announce_ducking": "播报时压低已验证的 AirPlay 背景音乐",
+          "announce_duck_volume": "背景音乐避让音量上限（%）",
+          "source_priority_1": "音源优先级 1",
+          "source_priority_2": "音源优先级 2",
+          "source_priority_3": "音源优先级 3"
         }
       }
+    },
+    "error": {
+      "invalid_source_priority": "三个音源必须各选择一次"
     }
   },
   "entity": {
@@ -127,6 +134,20 @@
     "switch": {
       "listener": {
         "name": "语音监听"
+      },
+      "speak_response": {
+        "name": "播报对话回复"
+      },
+      "use_context": {
+        "name": "使用共享会话上下文"
+      }
+    },
+    "text": {
+      "announce_text": {
+        "name": "播报文本（仅限非敏感内容）"
+      },
+      "send_text_text": {
+        "name": "对话文本（仅限非敏感内容）"
       }
     },
     "button": {
@@ -138,6 +159,12 @@
       },
       "restart_listener": {
         "name": "重启监听"
+      },
+      "announce_send": {
+        "name": "播报输入文本"
+      },
+      "send_text_send": {
+        "name": "发送输入对话"
       }
     },
     "select": {

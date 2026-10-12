@@ -3,7 +3,7 @@
 bridge_load_conversation_adapter() {
     original_curl=$1
     [ -x "$original_curl" ] || return 1
-    agent_script=$(config_value '.eoai_agent_script // "/data/eoai_agent.sh"')
+    agent_script=${BRIDGE_CONFIG_EOAI:-$(config_value '.eoai_agent_script // "/data/eoai_agent.sh"')}
     [ -r "$agent_script" ] || return 1
     # Reload its functions without resetting settings already selected by the
     # existing listener (including a locally configured cache path/TTL).
@@ -30,6 +30,7 @@ bridge_load_conversation_adapter() {
 }
 
 bridge_restore_conversation_state() {
+    # shellcheck disable=SC2154 # Supplied by text.sh under the session lock.
     if [ "$had_state" = true ];then
         # Restore the exact previous bytes, even if the old cache was malformed.
         cp -p "$WORK/previous.json" "$EOAIC2_STATE.$$" && \
@@ -41,7 +42,7 @@ bridge_restore_conversation_state() {
 
 bridge_refresh_ha_token() {
     [ -n "${HA_REFRESH_TOKEN:-}" ] || return 1
-    auth_source=$(config_value '.ha_auth_source // "/data/porcupine_launcher_kws"')
+    auth_source=${BRIDGE_CONFIG_AUTH:-$(config_value '.ha_auth_source // "/data/porcupine_launcher_kws"')}
     [ -r "$auth_source" ] || return 1
     # Extract only the reviewed original refresh function; never execute the KWS
     # launcher. Keep its grant, client ID and HA_TOKEN persistence. Its fatal

@@ -13,6 +13,7 @@ PLATFORMS = [
     Platform.BUTTON,
     Platform.SELECT,
     Platform.LIGHT,
+    Platform.TEXT,
 ]
 DEFAULT_PORT = 8766
 DEFAULT_MPD_PORT = 6600

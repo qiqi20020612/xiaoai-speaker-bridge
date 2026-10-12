@@ -178,7 +178,9 @@ case "$1" in
         ;;
     led)
         flag '.verified.led' || fail unsupported_led
-        voice_busy && fail busy
+        exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
+        bridge_lock_for 0 6 || fail busy
+        bridge_led_busy && fail busy
         led=/sys/devices/i2c-0/0-003a/led_rgb
         [ -w "$led" ] || led=/sys/devices/i2c-0/0-0023/led_rgb
         [ -w "$led" ] || fail unsupported_led

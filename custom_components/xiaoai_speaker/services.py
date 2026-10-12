@@ -50,6 +50,22 @@ def register_services(hass):
             ):
                 raise BridgeError("device_offline")
             if call.service in ("announce", "send_text"):
+                caps = coordinator.info.get("capabilities", {})
+                capability = "announce" if call.service == "announce" else "conversation"
+                if not caps.get(capability) or coordinator.data.get("state_stale"):
+                    raise BridgeError("capability_unavailable")
+                if (
+                    call.service == "send_text"
+                    and payload.get("speak_response", True)
+                    and not caps.get("announce")
+                ):
+                    raise BridgeError("tts_unavailable")
+                if coordinator.entry.options.get("announce_ducking") and (
+                    call.service == "announce" or payload.get("speak_response", True)
+                ):
+                    payload["duck_volume"] = coordinator.entry.options.get(
+                        "announce_duck_volume", 10
+                    )
                 job = await coordinator.jobs.submit(call.service, payload, call.context.id)
                 result = (
                     await coordinator.jobs.wait(job)

@@ -32,7 +32,18 @@ def prepare_listener(source: str) -> str:
         "# Set lower rate if cannot convert later",
         ". /data/xiaoai_bridge/lib/listener-hooks.sh\n\n# Set lower rate if cannot convert later",
     )
-    source, count = re.subn(r"(?m)^(SAVED_VOL=.*)$", r"bridge_voice_begin\n\1", source)
+    source, count = re.subn(
+        r"(?m)^[ \t]*/bin/show_led[ \t]+1[ \t]*$",
+        "# Wake LED is handled before snapshot in bridge_voice_begin",
+        source,
+    )
+    if count != 1:
+        raise ValueError("Expected one verified standalone wake LED command")
+    if any(
+        "/bin/show_led" in line for line in source.splitlines() if not line.lstrip().startswith("#")
+    ):
+        raise ValueError("Unverified additional LED command; review the original launcher")
+    source, count = re.subn(r"(?m)^(SAVED_VOL=.*)$", r"bridge_voice_begin || exit 1\n\1", source)
     if count != 1:
         raise ValueError("Expected one volume snapshot before attenuation")
     start = '    if [ "${API_AVAILABLE}" = "1" ]; then'
@@ -55,11 +66,24 @@ def prepare_airplay_led(source: str) -> str:
     if "xiaoai_bridge/lib/common.sh" in source:
         raise ValueError("Use the saved unmodified LED source, not an already adapted file")
     source = exactly_once(source, "#!/bin/sh", "#!/bin/sh\n. /data/xiaoai_bridge/lib/common.sh")
-    source = exactly_once(source, "draw() {", "draw() {\n    voice_busy && return 0")
+    source = exactly_once(
+        source,
+        "draw() {",
+        """draw() {
+    exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
+    bridge_lock_for 0 6 || return 0
+    if bridge_led_busy; then flock -u 6; return 0; fi
+    bridge_original_draw "$@"
+    bridge_draw_result=$?
+    flock -u 6
+    return "$bridge_draw_result"
+}
+bridge_original_draw() {""",
+    )
     source = exactly_once(
         source,
         '    while [ -f "$STATE" ]; do',
-        '    while [ -f "$STATE" ]; do\n        if voice_busy; then rm -f "$STATE"; break; fi',
+        '    while [ -f "$STATE" ]; do\n        if bridge_led_busy; then rm -f "$STATE"; break; fi',
     )
     # The original hook's self-fork must point to its sibling, not to the untouched file.
     source = source.replace(
@@ -89,7 +113,7 @@ def main():
         pairs.append((args.airplay_led, "airplay-led.sh", prepare_airplay_led))
     if args.shairport:
         pairs.append((args.shairport, "shairport-sync.conf", prepare_shairport))
-    metadata = {"format": 1, "files": {}}
+    metadata = {"format": 2, "compatibility": {"listener_hooks": 2}, "files": {}}
     for original, name, transform in pairs:
         before = original.read_text()
         after = transform(before)
@@ -112,6 +136,8 @@ def main():
             "source_sha256": hashlib.sha256(before.encode()).hexdigest(),
             "output_sha256": hashlib.sha256(after.encode()).hexdigest(),
         }
+        if name == "airplay-led.sh":
+            metadata["compatibility"]["airplay_led_guard"] = 2
     path = args.output / "review.json"
     path.write_text(json.dumps(metadata, indent=2) + "\n")
     path.chmod(0o600)

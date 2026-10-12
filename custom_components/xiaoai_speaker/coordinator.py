@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .client import AuthenticationError, BridgeError
 from .const import DEFAULT_POLL, DOMAIN, SOURCE_PRIORITY
 from .jobs import JobManager
+from .quick import QuickControls
 from .volume import VolumeManager, choose_source
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class XiaoAICoordinator(DataUpdateCoordinator):
         self.info: dict = {}
         self.volume = VolumeManager(hass, entry, client)
         self.jobs = JobManager(hass, client, self._job_changed)
+        self.quick = QuickControls(self)
         self._events_task = None
         self._sequence = 0
         self._closed = False
@@ -138,6 +140,7 @@ class XiaoAICoordinator(DataUpdateCoordinator):
                     "source": decision.source,
                     "uncertain": decision.uncertain,
                     "idle_policy": self.volume.idle_policy,
+                    "priority": list(priority),
                 },
             )
         except BridgeError:
