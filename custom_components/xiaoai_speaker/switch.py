@@ -7,16 +7,16 @@ from homeassistant.const import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
 
 from .client import BridgeError
-from .entity import XiaoAIEntity
+from .entity import XiaoAIEntity, register_capability_entities
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
     c = entry.runtime_data.coordinator
-    if c.info.get("capabilities", {}).get("listener"):
-        async_add_entities([ListenerSwitch(c, "listener")])
+    register_capability_entities(entry, async_add_entities, [ListenerSwitch(c, "listener")])
 
 
 class ListenerSwitch(XiaoAIEntity, SwitchEntity):
+    required_capability = ("listener",)
     _attr_translation_key = "listener"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:microphone"
@@ -26,6 +26,7 @@ class ListenerSwitch(XiaoAIEntity, SwitchEntity):
         return self.coordinator.data.get("listener", {}).get("running")
 
     async def _set(self, running):
+        self.require_available()
         try:
             await self.coordinator.client.request(
                 "POST",

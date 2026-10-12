@@ -7,18 +7,16 @@ from homeassistant.const import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
 
 from .client import BridgeError
-from .entity import XiaoAIEntity
+from .entity import XiaoAIEntity, register_capability_entities
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
     c = entry.runtime_data.coordinator
-    caps = c.info.get("capabilities", {})
-    buttons = [ManagementButton(c, "refresh")]
-    if caps.get("conversation"):
-        buttons.append(ManagementButton(c, "reset_context"))
-    if caps.get("listener"):
-        buttons.append(ManagementButton(c, "restart_listener"))
-    async_add_entities(buttons)
+    register_capability_entities(
+        entry,
+        async_add_entities,
+        [ManagementButton(c, key) for key in ("refresh", "reset_context", "restart_listener")],
+    )
 
 
 class ManagementButton(XiaoAIEntity, ButtonEntity):
@@ -29,8 +27,14 @@ class ManagementButton(XiaoAIEntity, ButtonEntity):
         super().__init__(coordinator, key)
         self.key = key
         self._attr_translation_key = key
+        self.required_capability = {
+            "reset_context": ("conversation",),
+            "restart_listener": ("listener",),
+        }.get(key, ())
+        self._attr_entity_registry_enabled_default = key == "reset_context"
 
     async def async_press(self):
+        self.require_available()
         try:
             if self.key == "refresh":
                 await self.coordinator.async_request_refresh()

@@ -4,14 +4,18 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.exceptions import HomeAssistantError
 
 from .client import BridgeError
-from .entity import XiaoAIEntity
+from .entity import XiaoAIEntity, register_capability_entities
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
     coordinator = entry.runtime_data.coordinator
-    caps = coordinator.info.get("capabilities", {}).get("volume", {})
-    async_add_entities(
-        [VolumeNumber(coordinator, key) for key, writable in caps.items() if writable]
+    register_capability_entities(
+        entry,
+        async_add_entities,
+        [
+            VolumeNumber(coordinator, key)
+            for key in ("master", "tts", "bluetooth", "headphone", "airplay")
+        ],
     )
 
 
@@ -26,6 +30,7 @@ class VolumeNumber(XiaoAIEntity, NumberEntity):
     def __init__(self, coordinator, channel):
         super().__init__(coordinator, f"volume_{channel}")
         self.channel = channel
+        self.required_capability = ("volume", channel)
         self._attr_translation_key = f"volume_{channel}"
         self._attr_entity_registry_enabled_default = channel in ("master", "tts")
 
@@ -46,6 +51,7 @@ class VolumeNumber(XiaoAIEntity, NumberEntity):
         return value
 
     async def async_set_native_value(self, value):
+        self.require_available()
         try:
             await self.coordinator.volume.set(self.channel, value)
             await self.coordinator.async_request_refresh()

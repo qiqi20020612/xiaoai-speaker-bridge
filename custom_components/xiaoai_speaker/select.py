@@ -4,15 +4,14 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.const import EntityCategory
 
 from .const import IDLE_POLICIES
-from .entity import XiaoAIEntity
+from .entity import XiaoAIEntity, register_capability_entities
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
     c = entry.runtime_data.coordinator
-    entities = [IdlePolicySelect(c, "idle_policy")]
-    if c.info.get("capabilities", {}).get("conversation"):
-        entities.append(AgentSelect(c, "agent"))
-    async_add_entities(entities)
+    register_capability_entities(
+        entry, async_add_entities, [IdlePolicySelect(c, "idle_policy"), AgentSelect(c, "agent")]
+    )
 
 
 class IdlePolicySelect(XiaoAIEntity, SelectEntity):
@@ -32,6 +31,7 @@ class IdlePolicySelect(XiaoAIEntity, SelectEntity):
 
 
 class AgentSelect(XiaoAIEntity, SelectEntity):
+    required_capability = ("conversation",)
     _attr_translation_key = "agent"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_entity_registry_enabled_default = False
@@ -51,6 +51,7 @@ class AgentSelect(XiaoAIEntity, SelectEntity):
 
         from .client import BridgeError
 
+        self.require_available()
         if option not in self.options:
             raise HomeAssistantError("invalid_agent")
         try:
