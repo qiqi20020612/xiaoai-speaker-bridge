@@ -691,3 +691,21 @@ ha_refresh_token
     assert (path / "refresh-stop").exists() == refresh_error
     if not refresh_error:
         assert "HA_TOKEN=synthetic-refreshed" in (path / "existing-listener").read_text()
+
+
+def test_dead_tts_restore_is_independent_of_active_voice_master(text_device, speaker_shell):
+    _, path, env = text_device
+    body = f'''. "{path / "bridge/lib/listener-hooks.sh"}"
+bridge_voice_begin || exit 70
+bridge_voice_attenuate 10 || exit 71
+printf '%s' '{{"owner":0,"start":"","revision":0,"volumes":{{"tts":60}},"airplay_raw":"","airplay_active":"false"}}' > "$BRIDGE_RUNTIME/xiaoai_bridge.tts-volume.json"
+# Master remains voice-owned; recovery still services dead independent TTS.
+if bridge_recover_pending; then exit 72;fi
+[ ! -f "$BRIDGE_RUNTIME/xiaoai_bridge.tts-volume.json" ] || exit 73
+voice_busy || exit 74
+[ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" ] || exit 75
+bridge_restore_volume
+'''
+    result = run_shell(body, env, speaker_shell)
+    assert result.returncode == 0, result.stderr
+    assert "notifyvol 60%" in (path / "mixer-writes").read_text().splitlines()

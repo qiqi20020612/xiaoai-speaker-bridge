@@ -78,21 +78,26 @@ bridge_volume_recover() (
 bridge_recover_pending() (
     # Active owners retain their attenuation. Voice journals are eligible after
     # voice_end even though the persistent listener process is still alive.
-    voice_busy && exit 1
+    recovery_failed=0
     for recovery_kind in voice-volume duck tts-volume; do
         recovery_path="$BRIDGE_RUNTIME/xiaoai_bridge.$recovery_kind.json"
         [ -r "$recovery_path" ] || continue
+        # A failed master restore must not strand the independent notifyvol.
+        # Voice owns master/bluetooth, but dead TTS owners can safely restore
+        # their own channel while that voice is active, respecting revisions.
+        if voice_busy && [ "$recovery_kind" != tts-volume ]; then recovery_failed=1;continue;fi
         if [ "$recovery_kind" != voice-volume ]; then
             recovery_owner=$(jq -r '.owner // 0' "$recovery_path")
             recovery_start=$(jq -r '.start // ""' "$recovery_path")
             if bridge_owner_alive "$recovery_owner" "$recovery_start"; then
-                [ "${2:-}" != wait ] || exit 1
+                [ "${2:-}" != wait ] || recovery_failed=1
                 continue
             fi
         fi
-        bridge_volume_recover "$recovery_path" "${1:-3}" || exit 1
+        if ! bridge_volume_recover "$recovery_path" "${1:-3}"; then recovery_failed=1;continue;fi
         [ "$recovery_kind" != duck ] || rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.duck"
     done
+    exit "$recovery_failed"
 )
 
 bridge_has_pending_recovery() {
