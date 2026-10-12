@@ -861,12 +861,12 @@ def test_silent_remote_text_has_processing_but_no_speech_phases(text_device):
     assert not (path / "xiaoai_bridge.feedback").exists()
 
 
-def test_multiline_request_remains_literal_and_profile_has_no_text(text_device):
+def test_multiline_request_remains_literal_and_profile_has_no_text(text_device, speaker_shell):
     call, path, env = text_device
     text = "line one\nline two with $(no_command) and `no_command`"
     pipeline = path / "bridge/lib/text.sh"
     result = subprocess.run(
-        ["sh", str(pipeline), "announce", json.dumps({"text": text})],
+        [*speaker_shell, str(pipeline), "announce", json.dumps({"text": text})],
         env={**env, "XIAOAI_PROFILE": "1"},
         capture_output=True,
         text=True,

@@ -65,6 +65,7 @@ cleanup() {
             --data-binary "@$WORK/guard-end.json" "${HA_URL%/}/api/xiaoai_speaker/$DEVICE_ID/voice_guard" >/dev/null 2>&1 || true
     fi
     rm -rf "$WORK"
+    bridge_profile task_finished
 }
 trap 'cleanup' 0
 trap 'exit 143' HUP INT TERM
