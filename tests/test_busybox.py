@@ -20,6 +20,24 @@ def test_real_busybox_rejects_gnu_timeout_option(busybox_binary):
     assert result.returncode != 0 and "invalid option" in result.stderr
 
 
+def test_real_busybox_supports_readonly_audited_launcher_syntax(busybox_binary):
+    if not busybox_binary:
+        pytest.skip("Linux CI reproduces LX06 ash features verified in the read-only audit")
+    result = subprocess.run(
+        [
+            busybox_binary,
+            "ash",
+            "-c",
+            'language=zh-CN; [ "${language:0:2}" = zh ] || exit 1; '
+            'let count=1+1; [ "$count" = 2 ] || exit 1; '
+            "(printf hidden; printf hidden >&2) &>/dev/null",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0 and not result.stdout and not result.stderr
+
+
 def test_every_speaker_flock_command_uses_busybox_options():
     import re
 
