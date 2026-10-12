@@ -2,6 +2,7 @@
 # Both STT-completed voice input and HA text use this one local pipeline.
 set -eu
 . "${XIAOAI_BRIDGE_DIR:-/data/xiaoai_bridge}/lib/common.sh"
+. "$BRIDGE_DIR/lib/task-feedback.sh"
 MODE=$1
 REQUEST=$2
 bridge_profile task_begin
@@ -54,6 +55,7 @@ restore_tts_volume() {
 cleanup() {
     trap - HUP INT TERM
     restore_tts_volume || true
+    bridge_feedback_end || true
     bridge_profile task_cleanup
     if [ "$VOICE_GUARD_ACTIVE" = true ]; then
         command curl -fsS --connect-timeout 1 --max-time 2 \
@@ -96,6 +98,8 @@ if [ "$MODE" != announce ]; then
     . "$BRIDGE_DIR/lib/conversation.sh"
     bridge_load_conversation_adapter "$ORIGINAL_CURL" || fail conversation_adapter_missing
 fi
+bridge_feedback_setup
+bridge_feedback_stage processing
 [ -x "$TTS_PATH" ] || fail tts_unavailable
 bridge_profile config_ready
 
@@ -126,6 +130,7 @@ speak() {
         flock -u 7
     fi
     printf '{"stage":"synthesizing"}\n'
+    bridge_feedback_stage synthesizing
     bridge_profile tts_launch
     "$TTS_PATH" "$utterance" > /dev/null 2>&1 &
     tts_pid=$!
@@ -148,7 +153,7 @@ speak() {
                 [ "$playing" = true ] && break
                 pending=$next
             done
-            if [ "$playing" = true ]; then printf '{"stage":"playing"}\n';bridge_profile tts_playing;break;fi
+            if [ "$playing" = true ]; then printf '{"stage":"playing"}\n';bridge_feedback_stage playing;bridge_profile tts_playing;break;fi
         fi
         sleep 0.25
     done

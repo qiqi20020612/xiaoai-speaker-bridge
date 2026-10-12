@@ -9,6 +9,10 @@ bridge_voice_begin() {
     printf '%s\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
     trap 'bridge_voice_exit' HUP INT TERM
     bridge_profile wake
+    exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
+    bridge_lock_for 1 6 || { bridge_voice_release; return 1; }
+    export XIAOAI_VOICE_LED_LOCK=1
+    rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.feedback"
     # This is the original, verified LX06 wake primitive, moved ahead of locks,
     # jq and DBus. Recording/attenuation still waits for the complete snapshot.
     [ ! -x /bin/show_led ] || /bin/show_led 1
@@ -38,6 +42,8 @@ bridge_voice_begin() {
 }
 
 bridge_voice_release() {
+    if [ "${XIAOAI_VOICE_LED_LOCK:-0}" = 1 ]; then flock -u 6;fi
+    export XIAOAI_VOICE_LED_LOCK=0
     rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
     "$BRIDGE_BIN" --emit '{"type":"voice_end"}' >/dev/null 2>&1 || true
     trap - HUP INT TERM

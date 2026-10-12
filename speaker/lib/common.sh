@@ -32,6 +32,15 @@ voice_busy() {
     kill -0 "$voice_owner" 2>/dev/null
 }
 
+feedback_busy() {
+    [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" ] || return 1
+    read feedback_owner < "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" || return 1
+    case "$feedback_owner" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$feedback_owner" -gt 1 ] && kill -0 "$feedback_owner" 2>/dev/null
+}
+
+bridge_led_busy() { voice_busy || feedback_busy; }
+
 hooks_ready() {
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" ] || return 1
     read hook_owner < "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" || return 1

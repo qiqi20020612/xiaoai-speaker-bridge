@@ -58,11 +58,24 @@ def prepare_airplay_led(source: str) -> str:
     if "xiaoai_bridge/lib/common.sh" in source:
         raise ValueError("Use the saved unmodified LED source, not an already adapted file")
     source = exactly_once(source, "#!/bin/sh", "#!/bin/sh\n. /data/xiaoai_bridge/lib/common.sh")
-    source = exactly_once(source, "draw() {", "draw() {\n    voice_busy && return 0")
+    source = exactly_once(
+        source,
+        "draw() {",
+        """draw() {
+    exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
+    bridge_lock_for 0 6 || return 0
+    if bridge_led_busy; then flock -u 6; return 0; fi
+    bridge_original_draw "$@"
+    bridge_draw_result=$?
+    flock -u 6
+    return "$bridge_draw_result"
+}
+bridge_original_draw() {""",
+    )
     source = exactly_once(
         source,
         '    while [ -f "$STATE" ]; do',
-        '    while [ -f "$STATE" ]; do\n        if voice_busy; then rm -f "$STATE"; break; fi',
+        '    while [ -f "$STATE" ]; do\n        if bridge_led_busy; then rm -f "$STATE"; break; fi',
     )
     # The original hook's self-fork must point to its sibling, not to the untouched file.
     source = source.replace(

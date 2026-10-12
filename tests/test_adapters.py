@@ -57,7 +57,8 @@ draw() {
 /data/airplay_volume_led --worker
 """
     prepared = prepare_airplay_led(source)
-    assert "voice_busy && return 0" in prepared
-    assert "if voice_busy;" in prepared
+    assert "bridge_lock_for 0 6" in prepared
+    assert 'bridge_original_draw "$@"' in prepared
+    assert "if bridge_led_busy;" in prepared
     assert "/data/xiaoai_bridge/adapter/airplay-led.sh --worker" in prepared
     assert "voice_busy" not in source
