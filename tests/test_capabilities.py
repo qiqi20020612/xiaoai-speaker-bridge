@@ -77,3 +77,92 @@ async def test_late_capabilities_loss_recovery_and_offline_keep_identity(hass, m
         await c.async_refresh()
     assert hass.states.get(button).state == "unavailable"
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_quick_inputs_only_send_on_click_use_services_and_block_duplicate(hass, mock_clients):
+    entry, c = await setup(hass)
+    registry = er.async_get(hass)
+    text_id = registry.async_get_entity_id("text", DOMAIN, "synthetic-speaker_send_text_text")
+    button = registry.async_get_entity_id("button", DOMAIN, "synthetic-speaker_send_text_send")
+    speak = registry.async_get_entity_id("switch", DOMAIN, "synthetic-speaker_speak_response")
+    context = registry.async_get_entity_id("switch", DOMAIN, "synthetic-speaker_use_context")
+    assert hass.states.get(speak).state == hass.states.get(context).state == "on"
+    with patch.object(c.jobs, "submit", wraps=c.jobs.submit) as submit:
+        await hass.services.async_call(
+            "text",
+            "set_value",
+            {"entity_id": text_id, "value": "synthetic non-sensitive instruction"},
+            blocking=True,
+        )
+        submit.assert_not_called()
+        await hass.services.async_call("switch", "turn_off", {"entity_id": speak}, blocking=True)
+        await hass.services.async_call("button", "press", {"entity_id": button}, blocking=True)
+        assert submit.call_count == 1
+        assert submit.call_args.args[0] == "send_text"
+        assert submit.call_args.args[1]["speak_response"] is False
+        assert submit.call_args.args[1]["use_context"] is True
+        assert hass.states.get(text_id).state == ""
+        await hass.services.async_call(
+            "text",
+            "set_value",
+            {"entity_id": text_id, "value": "another instruction"},
+            blocking=True,
+        )
+        with pytest.raises(HomeAssistantError, match="quick_action_busy"):
+            await hass.services.async_call("button", "press", {"entity_id": button}, blocking=True)
+        assert submit.call_count == 1
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_native_text_privacy_is_explicit_and_recorder_filter_excludes_states(
+    hass, mock_clients
+):
+    from homeassistant.helpers.entityfilter import generate_filter
+
+    from custom_components.xiaoai_speaker.diagnostics import async_get_config_entry_diagnostics
+
+    entry, c = await setup(hass)
+    registry = er.async_get(hass)
+    text_id = registry.async_get_entity_id("text", DOMAIN, "synthetic-speaker_announce_text")
+    marker = "synthetic-private-marker"
+    await hass.services.async_call(
+        "text", "set_value", {"entity_id": text_id, "value": marker}, blocking=True
+    )
+    assert (
+        hass.states.get(text_id).state == marker
+    )  # Never claim native TextEntity is secret storage.
+    recorder_filter = generate_filter([], [], [], [text_id])
+    assert not recorder_filter(text_id)
+    assert recorder_filter("media_player.synthetic_speaker")
+    assert marker not in str(await async_get_config_entry_diagnostics(hass, entry))
+    await hass.services.async_call(
+        "text", "set_value", {"entity_id": text_id, "value": ""}, blocking=True
+    )
+    button = registry.async_get_entity_id("button", DOMAIN, "synthetic-speaker_announce_send")
+    with pytest.raises(HomeAssistantError, match="invalid_text"):
+        await hass.services.async_call("button", "press", {"entity_id": button}, blocking=True)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_ducking_options_are_applied_only_to_speaking_jobs(hass, mock_clients):
+    entry, c = await setup(hass, {"announce_ducking": True, "announce_duck_volume": 10})
+    with patch.object(c.jobs, "submit", wraps=c.jobs.submit) as submit:
+        await hass.services.async_call(
+            DOMAIN,
+            "announce",
+            {"entity_id": "media_player.synthetic_speaker", "text": "test"},
+            blocking=True,
+        )
+        assert submit.call_args.args[1]["duck_volume"] == 10
+        await hass.services.async_call(
+            DOMAIN,
+            "send_text",
+            {
+                "entity_id": "media_player.synthetic_speaker",
+                "text": "silent",
+                "speak_response": False,
+            },
+            blocking=True,
+        )
+        assert "duck_volume" not in submit.call_args.args[1]
+    assert await hass.config_entries.async_unload(entry.entry_id)

@@ -134,6 +134,20 @@
     "switch": {
       "listener": {
         "name": "语音监听"
+      },
+      "speak_response": {
+        "name": "播报对话回复"
+      },
+      "use_context": {
+        "name": "使用共享会话上下文"
+      }
+    },
+    "text": {
+      "announce_text": {
+        "name": "播报文本（仅限非敏感内容）"
+      },
+      "send_text_text": {
+        "name": "对话文本（仅限非敏感内容）"
       }
     },
     "button": {
@@ -145,6 +159,12 @@
       },
       "restart_listener": {
         "name": "重启监听"
+      },
+      "announce_send": {
+        "name": "播报输入文本"
+      },
+      "send_text_send": {
+        "name": "发送输入对话"
       }
     },
     "select": {
