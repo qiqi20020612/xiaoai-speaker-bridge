@@ -23,6 +23,9 @@ class StateBinary(XiaoAIEntity, BinarySensorEntity):
         super().__init__(coordinator, key)
         self.key = key
         self._attr_translation_key = key
+        self._attr_entity_registry_enabled_default = key != "source_uncertain"
+        if key in ("voice_active", "airplay_active"):
+            self._attr_entity_category = None
         if key == "online":
             self._attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
 

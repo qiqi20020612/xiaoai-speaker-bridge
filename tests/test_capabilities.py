@@ -79,6 +79,41 @@ async def test_late_capabilities_loss_recovery_and_offline_keep_identity(hass, m
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_legacy_sensor_ids_and_manual_enabled_choice_are_preserved(hass, mock_clients):
+    entry = MockConfigEntry(
+        domain=DOMAIN, title="Synthetic speaker", data=DATA, unique_id="synthetic-speaker"
+    )
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    legacy = registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "synthetic-speaker_bridge_peak_rss",
+        suggested_object_id="my_existing_peak",
+        config_entry=entry,
+        disabled_by=None,
+    )
+    enabled = registry.async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "synthetic-speaker_memory_available",
+        suggested_object_id="my_existing_memory",
+        config_entry=entry,
+        disabled_by=None,
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(legacy.entity_id) is not None
+    assert hass.states.get(enabled.entity_id) is not None
+    assert registry.async_get(legacy.entity_id).disabled_by is None
+    assert registry.async_get_entity_id("sensor", DOMAIN, "synthetic-speaker_memory_total") is None
+    assert (
+        registry.async_get_entity_id("sensor", DOMAIN, "synthetic-speaker_airplay_raw_volume")
+        is None
+    )
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_quick_inputs_only_send_on_click_use_services_and_block_duplicate(hass, mock_clients):
     entry, c = await setup(hass)
     registry = er.async_get(hass)
