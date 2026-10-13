@@ -5,6 +5,7 @@ BRIDGE_CONFIG=${XIAOAI_BRIDGE_CONFIG:-/data/xiaoai_bridge/config.json}
 BRIDGE_RUNTIME=${XIAOAI_BRIDGE_RUNTIME:-/tmp}
 BRIDGE_DIR=${XIAOAI_BRIDGE_DIR:-/data/xiaoai_bridge}
 BRIDGE_BIN=${XIAOAI_BRIDGE_BIN:-$BRIDGE_DIR/bin/xiaoai_bridge}
+BRIDGE_JSON_BIN=${XIAOAI_BRIDGE_JSON_BIN:-$BRIDGE_BIN}
 . "${XIAOAI_BRIDGE_HELPER_DIR:-$BRIDGE_DIR/lib}/locks.sh"
 
 bridge_mark_owner() {
@@ -21,18 +22,38 @@ bridge_listener_pid() {
 bridge_profile() {
     [ "${XIAOAI_PROFILE:-0}" = 1 ] || return 0
     profile_file="$BRIDGE_RUNTIME/xiaoai_bridge.profile"
+    [ ! -L "$profile_file" ] || return 0
     if [ -f "$profile_file" ] && [ "$(wc -c < "$profile_file")" -ge 65536 ]; then
-        mv -f "$profile_file" "$profile_file.1"
+        mv -f "$profile_file" "$profile_file.1" || return 0
     fi
     profile_clock=unavailable
     [ ! -r /proc/uptime ] || read profile_clock profile_rest < /proc/uptime
-    printf 'pid=%s phase=%s uptime=%s\n' "$$" "$1" "$profile_clock" >> "$profile_file"
+    profile_cycle=${XIAOAI_VOICE_CYCLE:-}
+    profile_suffix=''
+    case "$profile_cycle" in ''|*[!0-9.]*) ;; *) profile_suffix=" cycle=$profile_cycle" ;; esac
+    printf 'pid=%s phase=%s uptime=%s%s\n' "$$" "$1" "$profile_clock" "$profile_suffix" >> "$profile_file" || true
 }
 
-fail() { printf '{"error":"%s"}\n' "$1"; exit 1; }
+bridge_diagnostic_error() {
+    # A stable error code only. Never include text, config, OAuth or responses.
+    [ "${BRIDGE_TEXT_DIAGNOSTICS:-0}" = 1 ] || return 0
+    case "$1" in ''|*[!a-z_]*) return 0 ;; esac
+    diagnostic_file="$BRIDGE_RUNTIME/xiaoai_bridge.text-errors"
+    [ ! -L "$diagnostic_file" ] || return 0
+    if [ -f "$diagnostic_file" ] && [ "$(wc -c < "$diagnostic_file")" -ge 65536 ]; then
+        mv -f "$diagnostic_file" "$diagnostic_file.1" || return 0
+    fi
+    printf 'pid=%s error=%s\n' "$$" "$1" >> "$diagnostic_file"
+}
+fail() { bridge_diagnostic_error "$1" || true;printf '{"error":"%s"}\n' "$1"; exit 1; }
+bridge_json() { "$BRIDGE_JSON_BIN" --json-op "$@"; }
 config_value() { jq -r "$1" "$BRIDGE_CONFIG" 2>/dev/null; }
 flag() { [ "$(config_value "$1 // false")" = true ]; }
 request_value() { printf '%s' "$REQUEST" | jq -r "$1"; }
+bridge_valid_agent() {
+    case "$1" in conversation.*) agent_suffix=${1#conversation.} ;; *) return 1 ;; esac
+    case "$agent_suffix" in ''|*[!a-zA-Z0-9_]*) return 1 ;; esac
+}
 
 voice_busy() {
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice" ] || return 1
@@ -57,14 +78,14 @@ duck_busy() {
 hooks_ready() {
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" ] || return 1
     read hook_owner hook_start hook_version < "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" || return 1
-    [ "$hook_version" = 3 ] && bridge_listener_pid "$hook_owner" "$hook_start"
+    [ "$hook_version" = 4 ] && bridge_listener_pid "$hook_owner" "$hook_start"
 }
 
 atomic_json() {
     json_target=$1
     json_tmp="$json_target.$$"
     cat > "$json_tmp" || { rm -f "$json_tmp"; return 1; }
-    jq -e . "$json_tmp" >/dev/null 2>&1 || { rm -f "$json_tmp"; return 1; }
+    bridge_json validate < "$json_tmp" >/dev/null 2>&1 || { rm -f "$json_tmp"; return 1; }
     chmod 600 "$json_tmp"
     mv -f "$json_tmp" "$json_target"
 }
@@ -103,6 +124,7 @@ mixer_name() {
 
 [ "${BRIDGE_VOLUME_RECOVERY_LOADED:-0}" = 1 ] ||
     . "${XIAOAI_BRIDGE_HELPER_DIR:-$BRIDGE_DIR/lib}/volume-recovery.sh"
+. "${XIAOAI_BRIDGE_HELPER_DIR:-$BRIDGE_DIR/lib}/voice-led.sh"
 
 # Store only desired hardware values and a revision, not HA policy or a task queue.
 volume_write() (
@@ -116,6 +138,10 @@ volume_write() (
     if ! voice_busy; then bridge_recover_pending || true;fi
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
     bridge_lock_for 3 7 || fail busy
+    file="$BRIDGE_RUNTIME/xiaoai_bridge.desired.json"
+    old='{"revision":0,"volumes":{},"versions":{}}'
+    [ -r "$file" ] && old=$(cat "$file")
+    desired_update=$(printf '%s' "$old" | bridge_json desired-update "$channel" "$level") || fail state_write_failed
     if [ "$channel" = airplay ]; then
         flag '.verified.airplay_volume' || fail unsupported_volume_target
         [ "$(dbus_get_all org.gnome.ShairportSync.RemoteControl | dbus_property Available)" = true ] || fail volume_unavailable
@@ -142,11 +168,7 @@ volume_write() (
             amixer sset "$mixer" "${level}%" >/dev/null 2>&1 || fail hardware_control_failed
         fi
     fi
-    file="$BRIDGE_RUNTIME/xiaoai_bridge.desired.json"
-    old='{"revision":0,"volumes":{},"versions":{}}'
-    [ -r "$file" ] && old=$(cat "$file")
-    printf '%s' "$old" | jq -c --arg k "$channel" --argjson v "$level" \
-        '.revision=((.revision // 0)+1) | .volumes[$k]=$v | .versions[$k]=.revision' | atomic_json "$file" || fail state_write_failed
+    printf '%s' "$desired_update" | atomic_json "$file" || fail state_write_failed
     applied=true
     voice_busy && case "$channel" in master|bluetooth) applied=false ;; esac
     duck_busy && [ "$channel" = master ] && applied=false

@@ -29,10 +29,15 @@ def ha_http(socket_enabled):
 
 
 @pytest.fixture
-def text_device(tmp_path, install_flock, speaker_shell, ha_http, busybox_binary):
+def text_device(
+    tmp_path, install_flock, speaker_shell, ha_http, busybox_binary, native_json_binary
+):
     tools = tmp_path / "tools"
     tools.mkdir()
     install_flock(tools)
+    configured_jq = os.environ.get("XIAOAI_TEST_JQ16")
+    if configured_jq:
+        script(tools / "jq", f'#!/bin/sh\nexec "{Path(configured_jq).resolve()}" "$@"\n')
     if busybox_binary:
         for applet in ("awk", "sed"):
             script(tools / applet, f'#!/bin/sh\nexec "{busybox_binary}" {applet} "$@"\n')
@@ -115,6 +120,7 @@ STT_LANGUAGE=zh-CN
         "STATE_DIR": str(tmp_path),
         "XIAOAI_BRIDGE_DIR": str(bridge),
         "XIAOAI_BRIDGE_BIN": str(tools / "fake-bridge"),
+        "XIAOAI_BRIDGE_JSON_BIN": str(native_json_binary),
         "XIAOAI_BRIDGE_RUNTIME": str(tmp_path),
         "XIAOAI_BRIDGE_CONFIG": str(config),
     }
@@ -587,7 +593,7 @@ bridge_error_tts
     "ap,bt,mpd",
     [(a, b, m) for a in (False, True) for b in (False, True) for m in ("play", "stop", "unknown")],
 )
-def test_snapshot_single_jq_keeps_all_source_combinations(text_device, speaker_shell, ap, bt, mpd):
+def test_snapshot_without_jq_keeps_all_source_combinations(text_device, speaker_shell, ap, bt, mpd):
     _, path, env = text_device
     tools = path / "tools"
     real_jq = shutil.which("jq")
@@ -632,7 +638,7 @@ esac
     assert snapshot["uncertain"] == ((not sources and mpd == "unknown") or len(sources) > 1)
     assert snapshot["volumes"] == {"master": 60, "bluetooth": 50}
     assert snapshot["pid"] == 42
-    assert (path / "jq-count").read_text() == "x"
+    assert not (path / "jq-count").exists()
 
 
 def test_wake_led_precedes_slow_snapshot_and_attenuation(text_device, speaker_shell):
@@ -664,7 +670,7 @@ bridge_restore_volume
     assert result.returncode == 0, result.stderr
     assert (path / "order").read_text().splitlines() == ["led", "snapshot", "attenuation"]
     profile = (path / "xiaoai_bridge.profile").read_text()
-    assert "phase=wake_led" in profile and "phase=recording_ready" in profile
+    assert "phase=wake_led" in profile and "phase=wake_audio_ready" in profile
     assert "synthetic-token" not in profile
 
 

@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "json.h"
+#include "json_ops.h"
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
@@ -22,7 +23,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define VERSION "0.1.5"
+#define VERSION "0.1.6"
 #define CLIENTS 8
 #define BODY 12288
 #define OUTPUT 32768
@@ -1484,6 +1485,10 @@ int main(int argc, char **argv) {
         puts(VERSION);
         return 0;
     }
+    if (argc >= 3 && strcmp(argv[1], "--json-op") == 0)
+        return bridge_json_cli(argc - 2, argv + 2);
+    if (argc == 4 && strcmp(argv[1], "--trace-pcm") == 0)
+        return bridge_trace_pcm(argv[2], argv[3]);
     const char *config = getenv("XIAOAI_BRIDGE_CONFIG");
     if (!config)
         config = "/data/xiaoai_bridge/config.json";

@@ -185,6 +185,7 @@ def test_activation_changes_only_one_include_and_keeps_refreshed_values(
     shutil.copy2(ROOT / "speaker/lib/common.sh", bridge / "lib/common.sh")
     shutil.copy2(ROOT / "speaker/lib/locks.sh", bridge / "lib/locks.sh")
     shutil.copy2(ROOT / "speaker/lib/volume-recovery.sh", bridge / "lib/volume-recovery.sh")
+    shutil.copy2(ROOT / "speaker/lib/voice-led.sh", bridge / "lib/voice-led.sh")
     shutil.copy2(ROOT / "speaker/lib/adapter-check.sh", bridge / "lib/adapter-check.sh")
     executable(bridge / "lib/listener-service.sh", ":")
     private_adapter(data, bridge / "adapter")
@@ -473,7 +474,10 @@ def test_only_enabled_adapter_is_reloaded_to_receive_fixed_shell_functions(insta
 
 @pytest.mark.parametrize("location", ["package", "installed", "retry"])
 @pytest.mark.parametrize("mode", ["--dry-run", "--apply"])
-def test_upgrade_rejects_legacy_adapter_before_mutating_installation(installation, location, mode):
+@pytest.mark.parametrize("legacy_format", [1, 3])
+def test_upgrade_rejects_legacy_adapter_before_mutating_installation(
+    installation, location, mode, legacy_format
+):
     call, data, cron, original_cron, original_boot, calls = installation
     dirs = {
         "package": data.parent / "package/adapter",
@@ -484,7 +488,7 @@ def test_upgrade_rejects_legacy_adapter_before_mutating_installation(installatio
     private_adapter(data, adapter)
     review = adapter / "review.json"
     values = json.loads(review.read_text())
-    values["format"] = 1
+    values["format"] = legacy_format
     review.write_text(json.dumps(values))
     if location == "retry":
         (data / "xiaoai_bridge.backup/status").write_text("failed_restored\n")
@@ -543,7 +547,7 @@ def test_upgrade_reuses_compatible_adapter_or_explicit_reviewed_replacement(inst
     private_adapter(data, data.parent / "package/adapter")
     # Even an identical public package must apply a newly reviewed private replacement.
     assert call("--apply").returncode == 0
-    assert json.loads((old / "adapter/review.json").read_text())["format"] == 3
+    assert json.loads((old / "adapter/review.json").read_text())["format"] == 4
     assert json.loads((old / "config.json").read_text())["token"] == "synthetic-stable"
 
 

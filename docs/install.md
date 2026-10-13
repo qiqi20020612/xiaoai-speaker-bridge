@@ -8,7 +8,7 @@
 
 从 [GitHub Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases) 下载同一版本的 LX06 ARM EABI5 hard-float 安装包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS`。没有正式发版的构建可使用 CI 的 `generic-two-end-packages`。包中没有配置令牌或具体设备的适配副本；只有 LX06 实测兼容，其他型号独立验证。
 
-在下载目录执行 `sha256sum --check SHA256SUMS`（macOS 使用 `shasum -a 256 --check SHA256SUMS`），全部通过后再准备部署副本。本轮升级和回滚另见[验收修复说明](acceptance-fixes.md)。
+在下载目录执行 `sha256sum --check SHA256SUMS`（macOS 使用 `shasum -a 256 --check SHA256SUMS`），全部通过后再准备部署副本。本轮升级和回滚另见[0.1.6 升级与复验说明](lx06-v016.md)。
 
 也可以使用校验过的 Zig 0.14.1 交叉编译器：
 
@@ -40,7 +40,7 @@ python3 speaker/tools/prepare_adapters.py \
 3. 原 `/data/listener` 在执行时加载，因此 Agent、OAuth token 刷新与 TTS 参数没有被复制到新版配置。
 4. LED `draw()` 和后台 worker 在语音活动时退让；自派生 worker 仍位于桥接同一端。
 
-0.1.5 的 `review.json` 为 format=3，包含 Listener hooks/LED guard 兼容版本。安装器和启用工具都检查原始/输出 SHA256、wake hook 和初始化顺序，保留合法的加载 LED 2 和结束 LED 11，仅将唤醒 LED 1 交给 hook；旧 format=1 不静默沿用，要求用本版工具重新生成。
+0.1.6 的 `review.json` 为 format=4、listener_hooks=4，KWS guard=1、AirPlay LED guard=3。安装器和启用工具检查原始/输出 SHA256、wake hook、录音入口、幂等结束 LED 和初始化顺序。合法 LED 1/2/11 全部保留其原语；唤醒 1 与结束 11 由 hook 管理，加载 2 保留原位置。旧 format=1/3 在设备文件替换前明确拒绝，须使用本版工具从原始三个脚本重新生成；不能只修改 review 数字。
 
 审核通过后，将私有生成目录放入**本机私有部署副本** `xiaoai_bridge/adapter/`。不要上传这份混合了本机原脚本的副本。通用包的 `SHA256SUMS` 核验通用文件；安装后使用 `INSTALLED_SHA256SUMS` 核验已部署通用文件，boot 单独按包内哈希核验；`review.json` 单独核验私有生成文件。
 
@@ -68,9 +68,9 @@ sh /tmp/xiaoai_bridge/install.sh --apply
 
 所有音箱 Shell 锁使用 BusyBox 支持的 `-s/-x/-u/-n`。超时锁通过 `lib/locks.sh` 使用同一个继承 FD、非阻塞独占锁和 1 秒粒度的有界等待；Linux 读取 `/proc/uptime` 检查单调截止时间。原 3/5/120 秒预算保持，无无限等待，不删除锁文件。`--dry-run` 也会在只读 FD 上试用实际锁接口。安装器另持有 boot 的内核锁，阻止旧 Cron 在目录切换/恢复期间启动半安装的桥接。
 
-0.1.3 的每次 probe 允许 15 秒，超时只终止自己的 worker 进程组，最多再等 5 秒退出。首次探测失败后等待 1、2 秒进行两次重试；`start.sh` 最多等待 75 秒，足够容纳三次探测及退出宽限。已有桥接进程尚在初始化时等待同一个实例；首次成功 probe 前 HTTP 健康状态仍为 503。0.1.5 的任务清理宽限为 20 秒，probe 的 5 秒宽限不变；停止脚本最多等 25 秒。连续三次失败或进程退出才触发失败恢复；其余未就绪情况到启动截止时间后失败。C 服务单独运行时，在首次重试耗尽后仍按 15 秒间隔继续探测，不自行影响原服务。
+0.1.3 的每次 probe 允许 15 秒，超时只终止自己的 worker 进程组，最多再等 5 秒退出。首次探测失败后等待 1、2 秒进行两次重试；`start.sh` 最多等待 75 秒，足够容纳三次探测及退出宽限。已有桥接进程尚在初始化时等待同一个实例；首次成功 probe 前 HTTP 健康状态仍为 503。0.1.6 的任务清理宽限为 20 秒，probe 的 5 秒宽限不变；停止脚本最多等 25 秒。连续三次失败或进程退出才触发失败恢复；其余未就绪情况到启动截止时间后失败。C 服务单独运行时，在首次重试耗尽后仍按 15 秒间隔继续探测，不自行影响原服务。
 
-**从当前已验证的 0.1.3 直接升级到 0.1.5 时，先重新生成并审阅私有适配副本，再用完整包执行 `--dry-run`、`--apply`**。配置、身份和兼容私有副本保留。升级前排空 HA 队列并暂停新任务触发，确认语音和 audio_active 均空闲；旧 0.1.3 无新版安装锁门控，排空到停止间仍须避免新输入。若新安装自动恢复为 `failed_restored`，先保存 `/tmp/xiaoai_bridge.log` 及 `.log.1` 并检查诊断，可直接重试 `--apply`；`recovery_required` 则先用同一完整包 `--rollback`。不要手工删除备份或覆盖原 listener/Agent 配置。
+**从当前已验证的 0.1.3 直接升级到 0.1.6 时，先重新生成并审阅私有适配副本，再用完整包执行 `--dry-run`、`--apply`**。配置、身份和兼容私有副本保留。升级前排空 HA 队列并暂停新任务触发，确认语音和 audio_active 均空闲；旧 0.1.3 无新版安装锁门控，排空到停止间仍须避免新输入。若新安装自动恢复为 `failed_restored`，先保存 `/tmp/xiaoai_bridge.log` 及 `.log.1` 并检查诊断，可直接重试 `--apply`；`recovery_required` 则先用同一完整包 `--rollback`。不要手工删除备份或覆盖原 listener/Agent 配置。
 
 首次安装默认不启用语音副本；已启用的 0.1.3 升级保留启用状态，不需重复 activate。原 listener 继续运行；在 voice hooks 未就绪时，播报/远程对话和可能被旧恢复覆盖的主/蓝牙音量写入会明确受限。随后必须完成共享入口启用，不能把这种保护状态当成功能验收。
 

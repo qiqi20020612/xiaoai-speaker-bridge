@@ -5,6 +5,24 @@ from pathlib import Path
 
 import pytest
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(scope="session")
+def native_json_binary():
+    subprocess.run(["make", "-s", "-C", str(ROOT / "speaker")], check=True)
+    return ROOT / "build/native/xiaoai_bridge"
+
+
+@pytest.fixture(scope="session")
+def jq16_binary():
+    configured = os.environ.get("XIAOAI_TEST_JQ16")
+    if not configured:
+        pytest.skip("Real jq 1.6 is required by Linux CI; configure XIAOAI_TEST_JQ16 locally")
+    path = Path(configured).resolve()
+    assert subprocess.check_output([str(path), "--version"], text=True).strip() == "jq-1.6"
+    return path
+
 
 @pytest.fixture(autouse=True)
 def enable_custom_integrations_fixture(enable_custom_integrations):

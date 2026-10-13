@@ -45,7 +45,7 @@ bridge_feedback_end() {
     if ! voice_busy; then
         color=0
         if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.led.json" ]; then
-            color=$(jq -r 'if .on then .brightness as $b | .rgb | map(. * $b / 255 | floor) | .[2]*65536+.[1]*256+.[0] else 0 end' "$BRIDGE_RUNTIME/xiaoai_bridge.led.json" 2>/dev/null || printf 0)
+            color=$(bridge_json led-color "$BRIDGE_RUNTIME/xiaoai_bridge.led.json" 2>/dev/null || printf 0)
         fi
         bridge_feedback_color "$color" || true
     fi

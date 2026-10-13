@@ -13,19 +13,25 @@ def main():
     args = parser.parse_args()
     previous = {}
     writer = csv.writer(sys.stdout)
-    writer.writerow(["pid", "from_phase", "to_phase", "elapsed_seconds"])
+    writer.writerow(["pid", "from_phase", "to_phase", "elapsed_seconds", "cycle", "from_pid"])
     with open(args.trace) as stream:
         for line in stream:
-            match = re.fullmatch(r"pid=(\d+) phase=([a-z_]+) uptime=(\d+(?:\.\d+)?)\n?", line)
+            match = re.fullmatch(
+                r"pid=(\d+) phase=([a-z_]+) uptime=(\d+(?:\.\d+)?)(?: cycle=([\d.]+))?\n?",
+                line,
+            )
             if match is None:
                 continue
-            pid, phase, at = match.groups()
+            pid, phase, at, cycle = match.groups()
             now = float(at)
-            if pid in previous:
-                before, started = previous[pid]
+            key = ("cycle", cycle) if cycle else ("pid", pid)
+            if key in previous:
+                before, started, before_pid = previous[key]
                 if now >= started:
-                    writer.writerow([pid, before, phase, f"{now - started:.3f}"])
-            previous[pid] = phase, now
+                    writer.writerow(
+                        [pid, before, phase, f"{now - started:.3f}", cycle or "", before_pid]
+                    )
+            previous[key] = phase, now, pid
 
 
 if __name__ == "__main__":

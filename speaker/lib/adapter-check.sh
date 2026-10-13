@@ -12,8 +12,8 @@ bridge_check_adapter_directory() {
     [ -r "$review_file" ] && [ -x "$listener_file" ] && [ -r "$original_launcher" ] || {
         bridge_adapter_reject 'Listener adapter or its original/review is missing.';return 1;
     }
-    jq -e '.format==3 and .compatibility.listener_hooks==3 and .compatibility.kws_guard==1' "$review_file" >/dev/null 2>&1 || {
-        bridge_adapter_reject 'Listener adapter is incompatible with the early wake LED hooks.';return 1;
+    jq -e '.format==4 and .compatibility.listener_hooks==4 and .compatibility.kws_guard==1' "$review_file" >/dev/null 2>&1 || {
+        bridge_adapter_reject 'Listener adapter needs the reviewed recording and idempotent end LED hooks.';return 1;
     }
     listener_source=$(jq -er '.files["listener.sh"].source_sha256' "$review_file") && \
     listener_output=$(jq -er '.files["listener.sh"].output_sha256' "$review_file") || {
@@ -23,12 +23,11 @@ bridge_check_adapter_directory() {
     [ "$listener_output" = "$(sha256sum "$listener_file" | awk '{print $1}')" ] || {
         bridge_adapter_reject 'Listener source/output no longer matches its private review.';return 1;
     }
-    # LX06's loading (2) and end fadeout (11) remain in their original order.
+    # Loading 2 stays after capture; the reviewed end hook runs 11/shut 1/2/3.
     sh -n "$listener_file" && awk '
         /^[[:space:]]*#/ {next}
         /\/bin\/show_led/ {
             if ($0 ~ /^[[:space:]]*\/bin\/show_led 2[[:space:]]*$/) {loading++;l=NR}
-            else if ($0 ~ /^[[:space:]]*\/bin\/show_led 11[[:space:]]*$/) {ending++;e=NR}
             else bad=1
         }
         /^\. \/data\/xiaoai_bridge\/lib\/listener-hooks\.sh$/ {hooks++;h=NR}
@@ -36,7 +35,10 @@ bridge_check_adapter_directory() {
         /^bridge_listener_initialized \|\| exit 1$/ {ready++;r=NR}
         /^bridge_voice_begin \|\| exit 1$/ {begins++;b=NR}
         /^SAVED_VOL=/ {snapshots++;s=NR}
-        END {exit !(hooks==1 && guards==1 && ready==1 && begins==1 && snapshots==1 && h<g && r==g+1 && r<b && s==b+1 && loading==1 && ending==1 && s<l && l<e && !bad)}
+        /^bridge_record_response \| tee/ {captures++;c=NR}
+        /^bridge_voice_led_finish \|\| true$/ {ending++;e=NR}
+        /^bridge_restore_volume$/ {restores++;v=NR}
+        END {exit !(hooks==1 && guards==1 && ready==1 && begins==1 && snapshots==1 && h<g && r==g+1 && r<b && s==b+1 && loading==1 && captures==1 && ending==1 && restores==1 && s<c && c<l && l<e && e<v && !bad)}
     ' "$listener_file" || {
         bridge_adapter_reject 'Listener adapter still has an LED command or an unverified wake hook order.';return 1;
     }

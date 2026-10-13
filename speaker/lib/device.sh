@@ -162,7 +162,7 @@ case "$1" in
         case "$state" in /tmp/*) ;; *) fail conversation_adapter_missing ;; esac
         if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json" ]; then
             agent=$(jq -r '.agent_id // empty' "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json")
-            printf '%s' "$agent" | grep -Eq '^conversation\.[a-zA-Z0-9_]+$' || fail invalid_agent
+            bridge_valid_agent "$agent" || fail invalid_agent
             [ "$agent" != "${EOAIC2_AGENT_ID:-}" ] && state="$BRIDGE_RUNTIME/xiaoai_bridge.context.$agent.json"
         fi
         rm -f "$state"
@@ -171,7 +171,7 @@ case "$1" in
     agent)
         agent=$(request_value '.agent_id')
         if [ "$agent" != null ]; then
-            printf '%s' "$agent" | grep -Eq '^conversation\.[a-zA-Z0-9_]+$' || fail invalid_agent
+            bridge_valid_agent "$agent" || fail invalid_agent
         fi
         exec 9> "$BRIDGE_RUNTIME/xiaoai_bridge.session.lock"
         flock -n 9 || fail busy

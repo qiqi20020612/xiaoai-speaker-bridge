@@ -70,6 +70,11 @@ ha_refresh_token() {
         ". /data/kws_guard.sh\nwhile true; do",
         ". /data/xiaoai_bridge/adapter/kws-guard.sh\nbridge_listener_initialized || exit 1\nwhile true; do",
     )
+    source = exactly_once(
+        source,
+        "# Trigger wakeword activated event",
+        "bridge_voice_detected\n# Trigger wakeword activated event",
+    )
     source, count = re.subn(r"(?m)^(SAVED_VOL=.*)$", r"bridge_voice_begin || exit 1\n\1", source)
     if count != 1:
         raise ValueError("Expected one volume snapshot before attenuation")
@@ -88,6 +93,12 @@ ha_refresh_token() {
         source,
         "set_volume ${VOLUME_DURING_STT}",
         'bridge_voice_attenuate "${VOLUME_DURING_STT}" || exit 1',
+    )
+    source = exactly_once(source, "${RECORD_COMMAND} | tee", "bridge_record_response | tee")
+    source = exactly_once(
+        source,
+        "/bin/show_led 11\nfor NUM in 1 2 3; do\n  /bin/shut_led ${NUM}\ndone",
+        "bridge_voice_led_finish || true",
     )
     # Error TTS participates in the same local audio mutex.
     source = source.replace("${SPEAK} error", "bridge_error_tts")
@@ -259,7 +270,7 @@ def main():
         pairs.append((args.airplay_led, "airplay-led.sh", prepare_airplay_led))
     if args.shairport:
         pairs.append((args.shairport, "shairport-sync.conf", prepare_shairport))
-    metadata = {"format": 3, "compatibility": {"listener_hooks": 3, "kws_guard": 1}, "files": {}}
+    metadata = {"format": 4, "compatibility": {"listener_hooks": 4, "kws_guard": 1}, "files": {}}
     for original, name, transform in pairs:
         raw = original.read_bytes()
         before = raw.decode("utf-8").replace("\r\n", "\n")

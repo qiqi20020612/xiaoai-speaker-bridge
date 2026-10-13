@@ -4,8 +4,10 @@ set -eu
 . "${XIAOAI_BRIDGE_DIR:-/data/xiaoai_bridge}/lib/common.sh"
 . "$BRIDGE_DIR/lib/task-feedback.sh"
 . "$BRIDGE_DIR/lib/ducking.sh"
+BRIDGE_TEXT_DIAGNOSTICS=1
 MODE=$1
 REQUEST=$2
+case "$MODE" in voice|send_text|announce) ;; *) fail invalid_request ;; esac
 bridge_profile task_begin
 # Read every request field with one jq startup. The final field is the raw
 # multiline text; it is read as data, never evaluated as shell code.
@@ -15,8 +17,12 @@ PARSED=$(printf '%s' "$REQUEST" | jq -r '
   (if has("use_context") then (.use_context|type)=="boolean" else true end) and
   (if has("volume") then (.volume|type)=="number" and .volume>=0 and .volume<=100 else true end) and
   (if has("duck_volume") then (.duck_volume|type)=="number" and .duck_volume>=0 and .duck_volume<=100 else true end) and
-  (if has("agent_id") then .agent_id==null or ((.agent_id|type)=="string" and (.agent_id|test("^conversation[.][a-zA-Z0-9_]+$"))) else true end) and
-  (.text|contains("\u0000")|not)) then
+  (if has("agent_id") then .agent_id==null or ((.agent_id|type)=="string" and (.agent_id|test("\\Aconversation[.][a-zA-Z0-9_]+\\z"))) else true end) and
+  (if has("_snapshot") then (._snapshot|type)=="object" and
+    (._snapshot|if has("source") then .source==null or (.source|type)=="string" else true end) and
+    (._snapshot|if has("uncertain") then (.uncertain|type)=="boolean" else true end)
+   else true end) and
+  (.text|explode|index(0)|not)) then
   (if has("speak_response") then .speak_response else true end),
   (if has("use_context") then .use_context else true end),
   (.volume // ""), (.duck_volume // ""), (.agent_id // ""), ((._snapshot // {})|tojson), .text
@@ -49,15 +55,21 @@ restore_tts_volume() {
     flock -u 7
 }
 cleanup() {
-    trap - HUP INT TERM
+    # A second TERM must not interrupt bounded volume/guard cleanup. C still
+    # enforces its existing final kill deadline for permanently blocked I/O.
+    trap '' HUP INT TERM
+    bridge_profile cleanup_begin
     restore_tts_volume || true
     bridge_duck_restore || true
+    bridge_profile cleanup_volumes_done
     bridge_feedback_end || true
     bridge_profile task_cleanup
     if [ "$VOICE_GUARD_ACTIVE" = true ]; then
+        bridge_profile guard_end_begin
         command curl -fsS --connect-timeout 1 --max-time 2 \
             -H "Authorization: Bearer ${HA_TOKEN}" -H 'Content-Type: application/json' \
             --data-binary "@$WORK/guard-end.json" "${HA_URL%/}/api/xiaoai_speaker/$DEVICE_ID/voice_guard" >/dev/null 2>&1 || true
+        bridge_profile guard_end_done
     fi
     rm -rf "$WORK"
     bridge_oauth_leave || true
@@ -122,7 +134,7 @@ speak() {
         exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
         bridge_lock_for 3 7 || fail busy
         saved_tts=$(percent notifyvol)
-        [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] && rev_before=$(jq -r '.revision // 0' "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
+        [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] && rev_before=$(bridge_json revision "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
         [ -n "$saved_tts" ] || fail volume_unknown
         TTS_RESTORE_VALUE=$saved_tts
         TTS_RESTORE_REVISION=$rev_before
@@ -162,8 +174,11 @@ speak() {
     done
     result=0;wait "$tts_pid" || result=$?
     bridge_profile tts_finished
+    bridge_profile tts_restore_begin
     restore_tts_volume || result=1
+    bridge_profile tts_volume_restored
     bridge_duck_restore || result=1
+    bridge_profile tts_duck_restored
     [ "$inherited_audio" = true ] || flock -u 8
     return "$result"
 }
@@ -181,7 +196,7 @@ if [ -z "$AGENT" ] && [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json" ]; then
     AGENT=$(jq -r '.agent_id // empty' "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json")
 fi
 if [ -n "$AGENT" ]; then
-    printf '%s' "$AGENT" | grep -Eq '^conversation\.[a-zA-Z0-9_]+$' || fail invalid_agent
+    bridge_valid_agent "$AGENT" || fail invalid_agent
     EOAIC2_AGENT_ID=$AGENT
 fi
 if [ "$USE_CONTEXT" = false ]; then
@@ -311,4 +326,11 @@ else
 fi
 flock -u 9
 [ "$SPEAK_RESPONSE" = true ] && speak "$reply" || { [ "$SPEAK_RESPONSE" = false ] || fail tts_failed; }
-jq -nc --arg reply "$reply" --argjson snapshot "$SNAPSHOT" '{reply_text:$reply,source:$snapshot.source,uncertain:$snapshot.uncertain}'
+# The response is now settled and the last TTS/temporary volume restore ended.
+# Finish only this voice's visual state before serialization/HA guard cleanup;
+# the parent retains audio/voice/LED ownership and its volume journal throughout.
+if [ "$MODE" = voice ]; then bridge_voice_led_finish || true;fi
+bridge_profile result_serialize_begin
+response_json=$(bridge_json reply "$reply" "$SNAPSHOT") || fail result_serialization_failed
+printf '%s\n' "$response_json"
+bridge_profile result_serialize_done

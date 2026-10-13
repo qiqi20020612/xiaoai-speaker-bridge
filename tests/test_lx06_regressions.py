@@ -40,17 +40,20 @@ def test_real_launcher_retains_record_loading_end_and_initialization_order():
     assert source.count("\n/bin/show_led 1\n") == 1
     assert "\n/bin/show_led 1\n" not in prepared
     assert prepared.count("\n/bin/show_led 2\n") == 1
-    assert prepared.count("\n/bin/show_led 11\n") == 1
+    assert "\n/bin/show_led 11\n" not in prepared
+    assert prepared.count("bridge_voice_led_finish || true") == 1
     assert prepared.index("\nget_stt_settings\n") < prepared.index(
         "\nbridge_listener_initialized ||"
     )
     assert prepared.index("\nbridge_listener_initialized ||") < prepared.index("\nkws_guard ||")
     assert prepared.index("\nbridge_voice_begin ||") < prepared.index("\nSAVED_VOL=")
-    assert prepared.index("bridge_voice_attenuate") < prepared.index("${RECORD_COMMAND} | tee")
-    assert prepared.index("${RECORD_COMMAND} | tee") < prepared.index("\n/bin/show_led 2\n")
+    assert prepared.index("bridge_voice_attenuate") < prepared.index("bridge_record_response | tee")
+    assert prepared.index("bridge_record_response | tee") < prepared.index("\n/bin/show_led 2\n")
     assert prepared.index("\n/bin/show_led 2\n") < prepared.index("bridge_process_text ||")
-    assert prepared.index("\n/bin/show_led 11\n") < prepared.index("\nbridge_restore_volume\n")
-    assert "for NUM in 1 2 3; do\n  /bin/shut_led ${NUM}" in prepared
+    assert prepared.index("bridge_voice_led_finish || true") < prepared.index(
+        "\nbridge_restore_volume\n"
+    )
+    assert "/bin/show_led 11" in (ROOT / "speaker/lib/voice-led.sh").read_text()
 
 
 def test_review_hashes_the_raw_crlf_source(tmp_path):
@@ -74,7 +77,7 @@ def test_review_hashes_the_raw_crlf_source(tmp_path):
         capture_output=True,
     )
     review = json.loads((output / "review.json").read_text())
-    assert review["format"] == 3
+    assert review["format"] == 4
     assert (
         review["files"]["listener.sh"]["source_sha256"]
         == hashlib.sha256(launcher.read_bytes()).hexdigest()
@@ -447,9 +450,9 @@ def test_oauth_wait_observes_rotated_credentials_without_refreshing_again(
         text=True,
     )
     try:
-        deadline = time.monotonic() + 3
-        while not ha_http.conversations and time.monotonic() < deadline:
-            time.sleep(0.02)
+        # Synchronize on the real 401 request, not workstation startup speed.
+        # The held OAuth directory still proves credential reload after waiting.
+        assert ha_http.conversation_entered.wait(timeout=10)
         assert ha_http.conversations and proc.poll() is None
         listener = path / "existing-listener"
         listener.write_text(
@@ -533,6 +536,12 @@ else:os.execv({real_curl!r},[{real_curl!r},*args])
     hooks = bridge / "lib/listener-hooks.sh"
     hooks.write_text(
         hooks.read_text()
+        .replace("/bin/show_led", str(tools / "show-led"))
+        .replace("/bin/shut_led", str(tools / "shut-led"))
+    )
+    voice_led = bridge / "lib/voice-led.sh"
+    voice_led.write_text(
+        voice_led.read_text()
         .replace("/bin/show_led", str(tools / "show-led"))
         .replace("/bin/shut_led", str(tools / "shut-led"))
     )
@@ -644,7 +653,7 @@ def test_ready_rejects_alive_unrelated_pid_and_markers_reject_wrong_start(
     _, path, env = text_device
     unrelated = os.getpid()
     start = Path(f"/proc/{unrelated}/stat").read_text().rsplit(") ", 1)[1].split()[19]
-    (path / "xiaoai_bridge.voice_ready").write_text(f"{unrelated} {start} 3\n")
+    (path / "xiaoai_bridge.voice_ready").write_text(f"{unrelated} {start} 4\n")
     (path / "xiaoai_bridge.voice").write_text(f"{unrelated} 0\n")
     body = f'''. "{path / "bridge/lib/common.sh"}"
 if hooks_ready; then exit 70;fi
