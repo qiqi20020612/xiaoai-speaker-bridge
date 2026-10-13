@@ -25,6 +25,7 @@ def executable(path, source):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", default="origin/main")
+    parser.add_argument("--json-binary", type=Path, default=ROOT / "build/native/xiaoai_bridge")
     parser.add_argument("--jq-delay", type=float, default=0.03)
     parser.add_argument("--samples", type=int, default=3)
     args = parser.parse_args()
@@ -36,6 +37,8 @@ def main():
     real_jq = shutil.which("jq")
     if not real_jq:
         parser.error("jq is required")
+    if not args.json_binary.is_file():
+        parser.error("Build the local native helper with make -C speaker, or set --json-binary")
     writer = csv.writer(sys.stdout)
     writer.writerow(
         [
@@ -83,6 +86,7 @@ case "$*" in *org.bluez*) printf 'string "State"\\nvariant string "%s"\\n' "$BEN
                 "PATH": str(tools) + os.pathsep + os.environ["PATH"],
                 "XIAOAI_BRIDGE_DIR": str(root),
                 "XIAOAI_BRIDGE_BIN": str(tools / "bridge"),
+                "XIAOAI_BRIDGE_JSON_BIN": str(args.json_binary.resolve()),
                 "XIAOAI_BRIDGE_RUNTIME": str(root),
                 "BENCH_COUNTER": str(root / "count"),
                 "BENCH_AP": ap,

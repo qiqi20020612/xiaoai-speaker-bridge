@@ -41,6 +41,15 @@ jobs:
           python-version: "3.14"
           cache: pip
       - run: python -m pip install -r requirements-dev.txt
+      - name: Checksum-verified real jq 1.6 (every speaker script test)
+        run: |
+          mkdir -p build/jq16/bin
+          curl --fail --location --retry 3 https://github.com/jqlang/jq/releases/download/jq-1.6/jq-linux64 --output build/jq16/bin/jq
+          printf '%s\n' 'af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44  build/jq16/bin/jq' | sha256sum --check
+          chmod 755 build/jq16/bin/jq
+          test "$(build/jq16/bin/jq --version)" = jq-1.6
+          echo "$PWD/build/jq16/bin" >> "$GITHUB_PATH"
+          echo "XIAOAI_TEST_JQ16=$PWD/build/jq16/bin/jq" >> "$GITHUB_ENV"
       - name: Build checksum-verified BusyBox 1.36.1 ash, flock, awk and sed
         run: |
           mkdir -p build
@@ -71,11 +80,12 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
-          clang-format --dry-run --Werror speaker/src/*.c speaker/src/*.h tests/json_test.c
+          clang-format --dry-run --Werror speaker/src/*.c speaker/src/*.h tests/json_test.c tests/json_ops_cli.c
       - name: C compiler and sanitizers
         run: |
           make -C speaker
           make -C speaker check
+          echo "XIAOAI_TEST_JSON_SANITIZER=$PWD/build/json_ops_sanitized" >> "$GITHUB_ENV"
       - name: POSIX shell static checks
         run: |
           sudo apt-get update -qq
@@ -110,7 +120,7 @@ jobs:
           echo "$PWD/zig-x86_64-linux-0.14.1" >> "$GITHUB_PATH"
       - name: Build static ARM EABI5 endpoint
         run: make -C speaker CC='zig cc -target arm-linux-musleabihf -static' LDFLAGS='-s' OUT=../build/armhf/xiaoai_bridge
-      - name: Inspect ELF and emulate CLI only
+      - name: Inspect ELF and emulate endpoint plus JSON/record trace helpers
         run: |
           file build/armhf/xiaoai_bridge
           readelf -h build/armhf/xiaoai_bridge

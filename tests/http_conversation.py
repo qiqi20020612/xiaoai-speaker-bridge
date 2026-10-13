@@ -17,6 +17,9 @@ class ConversationHTTP:
         self.refresh_body = {"access_token": "synthetic-refreshed"}
         self.intent = ""
         self.state_dir = None
+        self.hold_guard_end = False
+        self.guard_end_entered = threading.Event()
+        self.guard_end_release = threading.Event()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -63,6 +66,9 @@ class ConversationHTTP:
                     )
                     return
                 if self.path.endswith("/voice_guard"):
+                    if "text" not in body and owner.hold_guard_end:
+                        owner.guard_end_entered.set()
+                        owner.guard_end_release.wait(timeout=2)
                     self.reply(200, {"accepted": True})
                     return
                 if self.path == "/intent":

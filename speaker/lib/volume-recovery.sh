@@ -5,29 +5,12 @@ BRIDGE_VOLUME_RECOVERY_LOADED=1
 bridge_volume_journal() {
     journal_path=$1
     journal_values=$2
-    journal_duck=null
-    [ -z "${3:-}" ] || journal_duck=$(cat "$3") || return 1
-    journal_desired='{}'
-    [ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] || journal_desired=$(cat "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
-    journal_revision=0
-    [ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] ||
-        journal_revision=$(jq -r '.revision // 0' "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
     journal_ap=$(dbus_get_all org.gnome.ShairportSync || true)
     journal_raw=$(printf '%s' "$journal_ap" | dbus_property Volume)
     journal_active=$(printf '%s' "$journal_ap" | dbus_property Active)
-    jq -nc --argjson values "$journal_values" --argjson revision "$journal_revision" \
-        --argjson owner "$$" --arg start "$(bridge_pid_start "$$" 2>/dev/null || true)" \
-        --arg raw "$journal_raw" --arg active "$journal_active" --argjson duck "$journal_duck" \
-        --argjson current "${4:-null}" --argjson desired "$journal_desired" \
-        '{owner:$owner,start:$start,revision:$revision,volumes:$values,airplay_raw:$raw,airplay_active:$active} |
-        if $duck!=null then .revision=$duck.revision |
-          if ($active=="" or ($current==$duck.applied_master)) then
-            .airplay_raw=$duck.airplay_raw | .airplay_active=$duck.airplay_active | .applied_master=$duck.applied_master
-          elif ($raw!=$duck.airplay_raw or $active!=$duck.airplay_active) and
-               (($desired.versions.master // 0)<=$duck.revision) then .volumes.master=$current
-          else .applied_master=$duck.applied_master end
-        else . end' |
-        atomic_json "$journal_path"
+    journal_json=$(bridge_json journal "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" "${3:-}" "$journal_values" \
+        "$$" "$(bridge_pid_start "$$" 2>/dev/null || true)" "$journal_raw" "$journal_active" "${4:-null}") || return 1
+    printf '%s' "$journal_json" | atomic_json "$journal_path"
 }
 
 # Called with FD 7 already held. Keep the journal on any error; remove it only
@@ -35,24 +18,12 @@ bridge_volume_journal() {
 bridge_volume_recover_locked() (
     recovery_file=$1
     [ -r "$recovery_file" ] || exit 0
-    recovery_desired='{"versions":{},"volumes":{}}'
-    [ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] ||
-        recovery_desired=$(cat "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
     recovery_ap=$(dbus_get_all org.gnome.ShairportSync || true)
     recovery_raw=$(printf '%s' "$recovery_ap" | dbus_property Volume)
     recovery_active=$(printf '%s' "$recovery_ap" | dbus_property Active)
     recovery_master=$(percent mysoftvol)
-    recovery_plan=$(printf '%s' "$recovery_desired" | jq -r \
-        --slurpfile saved "$recovery_file" --arg raw "$recovery_raw" --arg active "$recovery_active" --arg master "$recovery_master" '
-        . as $d | $saved[0] as $s | $s.volumes | to_entries[] |
-        if (.value|type)!="number" then error("invalid_journal")
-        elif ($d.versions[.key] // 0)>$s.revision then [.key,($d.volumes[.key]|tostring)]|@tsv
-        elif (.key=="master" and ($s.airplay_active=="true" or $active=="true") and
-            (($s.airplay_raw!=$raw) or ($s.airplay_active!=$active))) then
-          if $active=="" then [.key,"pending"]|@tsv
-          elif ($s.applied_master!=null and ($s.applied_master|tostring)==$master) then [.key,"pending"]|@tsv
-          else empty end
-        else [.key,(.value|tostring)]|@tsv end' 2>/dev/null) || exit 1
+    recovery_plan=$(bridge_json recovery-plan "$recovery_file" "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" \
+        "$recovery_raw" "$recovery_active" "$recovery_master" 2>/dev/null) || exit 1
     printf '%s\n' "$recovery_plan" | {
       recovery_failed=false
       while read -r recovery_channel recovery_value; do
@@ -61,7 +32,8 @@ bridge_volume_recover_locked() (
         recovery_mixer=$(mixer_name "$recovery_channel") || exit 1
         if ! amixer sset "$recovery_mixer" "${recovery_value}%" >/dev/null 2>&1; then recovery_failed=true;continue;fi
         if [ "${2:-}" != keep ]; then
-            jq --arg channel "$recovery_channel" 'del(.volumes[$channel])' "$recovery_file" | atomic_json "$recovery_file" || exit 1
+            recovery_update=$(bridge_json drop-channel "$recovery_channel" < "$recovery_file") || exit 1
+            printf '%s' "$recovery_update" | atomic_json "$recovery_file" || exit 1
         fi
       done
       [ "$recovery_failed" = false ]
@@ -87,8 +59,10 @@ bridge_recover_pending() (
         # their own channel while that voice is active, respecting revisions.
         if voice_busy && [ "$recovery_kind" != tts-volume ]; then recovery_failed=1;continue;fi
         if [ "$recovery_kind" != voice-volume ]; then
-            recovery_owner=$(jq -r '.owner // 0' "$recovery_path")
-            recovery_start=$(jq -r '.start // ""' "$recovery_path")
+            recovery_identity=$(bridge_json owner "$recovery_path") || exit 1
+            { IFS= read -r recovery_owner;IFS= read -r recovery_start || recovery_start=''; } <<EOF
+$recovery_identity
+EOF
             if bridge_owner_alive "$recovery_owner" "$recovery_start"; then
                 [ "${2:-}" != wait ] || recovery_failed=1
                 continue
@@ -106,8 +80,10 @@ bridge_has_pending_recovery() {
     for recovery_kind in duck tts-volume; do
         recovery_path="$BRIDGE_RUNTIME/xiaoai_bridge.$recovery_kind.json"
         [ -r "$recovery_path" ] || continue
-        recovery_owner=$(jq -r '.owner // 0' "$recovery_path")
-        recovery_start=$(jq -r '.start // ""' "$recovery_path")
+        recovery_identity=$(bridge_json owner "$recovery_path") || return 0
+        { IFS= read -r recovery_owner;IFS= read -r recovery_start || recovery_start=''; } <<EOF
+$recovery_identity
+EOF
         bridge_owner_alive "$recovery_owner" "$recovery_start" || return 0
     done
     return 1

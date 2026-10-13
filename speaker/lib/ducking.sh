@@ -15,10 +15,10 @@ bridge_duck_begin() {
     [ -n "$saved" ] || { flock -u 7;fail volume_unknown; }
     awk -v target="$DUCK_VOLUME" -v current="$saved" 'BEGIN {exit !(target<current)}' || { flock -u 7;return 0; }
     rev=0
-    [ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] || rev=$(jq -r '.revision // 0' "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
+    [ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] || rev=$(bridge_json revision "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
     bridge_volume_journal "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" "{\"master\":$saved}" || { flock -u 7;fail state_write_failed; }
-    jq --argjson applied "$DUCK_VOLUME" '.applied_master=$applied' "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" |
-        atomic_json "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" || { flock -u 7;fail state_write_failed; }
+    duck_applied=$(bridge_json applied "$DUCK_VOLUME" < "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json") || { flock -u 7;fail state_write_failed; }
+    printf '%s' "$duck_applied" | atomic_json "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" || { flock -u 7;fail state_write_failed; }
     bridge_mark_owner "$BRIDGE_RUNTIME/xiaoai_bridge.duck"
     BRIDGE_DUCK_SAVED=$saved
     BRIDGE_DUCK_REVISION=$rev

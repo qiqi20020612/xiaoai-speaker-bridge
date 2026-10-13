@@ -79,6 +79,7 @@ def test_release_assets_have_architecture_versions_and_inner_outer_checksums(ass
         names = tar.getnames()
         assert "xiaoai_bridge/lib/ducking.sh" in names
         assert "xiaoai_bridge/lib/task-feedback.sh" in names
+        assert "xiaoai_bridge/lib/voice-led.sh" in names
         assert not any("adapter/" in name or name.endswith("config.json") for name in names)
         assert not any("__pycache__" in name or ".private" in name for name in names)
         assert tar.getmember("xiaoai_bridge/bin/xiaoai_bridge").mode & 0o100

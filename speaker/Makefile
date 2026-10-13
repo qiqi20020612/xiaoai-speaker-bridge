@@ -6,14 +6,16 @@ OUT ?= ../build/native/xiaoai_bridge
 
 all: $(OUT)
 
-$(OUT): src/bridge.c src/json.c src/json.h
+$(OUT): src/bridge.c src/json.c src/json.h src/json_ops.c src/json_ops.h
 	mkdir -p $(dir $(OUT))
-	$(CC) $(CPPFLAGS) $(CFLAGS) src/bridge.c src/json.c $(LDFLAGS) -o $(OUT)
+	$(CC) $(CPPFLAGS) $(CFLAGS) src/bridge.c src/json.c src/json_ops.c $(LDFLAGS) -o $(OUT)
 
 check:
 	mkdir -p ../build
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fsanitize=address,undefined -g src/json.c ../tests/json_test.c -o ../build/json_test
 	../build/json_test
+	$(CC) $(CPPFLAGS) $(CFLAGS) -fsanitize=address,undefined -g src/json.c src/json_ops.c ../tests/json_ops_cli.c -o ../build/json_ops_sanitized
+	printf '%s\n' '{"revision":0}' | ../build/json_ops_sanitized --json-op desired-update master 50
 
 clean:
 	rm -f $(OUT)

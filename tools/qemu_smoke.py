@@ -25,6 +25,59 @@ def main():
     token = "synthetic-qemu-only-token-000000000000000000000000"
     with tempfile.TemporaryDirectory(prefix="xiaoai-qemu-") as directory:
         runtime = Path(directory)
+        helper = [args.qemu, str(args.binary.resolve()), "--json-op"]
+        quoted = subprocess.check_output(
+            [*helper, "reply", 'synthetic "\\\n中文', '{"source":"mpd","uncertain":false}'],
+            text=True,
+        )
+        assert json.loads(quoted)["reply_text"] == 'synthetic "\\\n中文'
+        invalid = subprocess.run(
+            [*helper, "validate"], input=b'{"text":"a\\u0000b"}', capture_output=True
+        )
+        assert invalid.returncode == 2 and invalid.stderr == b"invalid_json_operation\n"
+        journal = runtime / "journal.json"
+        data = subprocess.check_output(
+            [
+                *helper,
+                "journal",
+                str(runtime / "missing.json"),
+                "",
+                '{"master":60,"bluetooth":50}',
+                "77",
+                "88",
+                "-18",
+                "true",
+                "null",
+            ],
+            text=True,
+        )
+        journal.write_text(data)
+        assert json.loads(data)["volumes"] == {"master": 60, "bluetooth": 50}
+        assert subprocess.check_output(
+            [
+                *helper,
+                "recovery-plan",
+                str(journal),
+                str(runtime / "missing.json"),
+                "-18",
+                "true",
+                "10",
+            ],
+            text=True,
+        ).splitlines() == ["master\t60", "bluetooth\t50"]
+        profile = runtime / "profile"
+        profile.write_text("")
+        pcm = bytes(range(256)) * 20
+        traced = subprocess.run(
+            [args.qemu, str(args.binary.resolve()), "--trace-pcm", str(profile), "77.88.1"],
+            input=pcm,
+            capture_output=True,
+        )
+        assert traced.returncode == 0 and traced.stdout == pcm
+        assert "phase=recording_first_output" in profile.read_text()
+        print(
+            "QEMU ARM JSON/journal/recovery/UTF-8/NUL and byte-exact opt-in trace passed; no audio hardware."
+        )
         config = runtime / "config.json"
         config.write_text(
             json.dumps(
