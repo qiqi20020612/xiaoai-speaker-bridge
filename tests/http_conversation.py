@@ -20,6 +20,7 @@ class ConversationHTTP:
         self.hold_guard_end = False
         self.guard_end_entered = threading.Event()
         self.guard_end_release = threading.Event()
+        self.conversation_entered = threading.Event()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -77,6 +78,7 @@ class ConversationHTTP:
                 if self.path != "/api/conversation/process":
                     self.reply(404, {})
                     return
+                owner.conversation_entered.set()
                 if owner.state_dir:
                     with (owner.state_dir / "legacy-calls").open("a") as calls:
                         calls.write("conversation\n")

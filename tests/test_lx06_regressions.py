@@ -450,9 +450,9 @@ def test_oauth_wait_observes_rotated_credentials_without_refreshing_again(
         text=True,
     )
     try:
-        deadline = time.monotonic() + 3
-        while not ha_http.conversations and time.monotonic() < deadline:
-            time.sleep(0.02)
+        # Synchronize on the real 401 request, not workstation startup speed.
+        # The held OAuth directory still proves credential reload after waiting.
+        assert ha_http.conversation_entered.wait(timeout=10)
         assert ha_http.conversations and proc.poll() is None
         listener = path / "existing-listener"
         listener.write_text(
