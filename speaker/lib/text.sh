@@ -331,5 +331,6 @@ flock -u 9
 # the parent retains audio/voice/LED ownership and its volume journal throughout.
 if [ "$MODE" = voice ]; then bridge_voice_led_finish || true;fi
 bridge_profile result_serialize_begin
-bridge_json reply "$reply" "$SNAPSHOT" || fail result_serialization_failed
+response_json=$(bridge_json reply "$reply" "$SNAPSHOT") || fail result_serialization_failed
+printf '%s\n' "$response_json"
 bridge_profile result_serialize_done

@@ -67,7 +67,9 @@ $journal_fields
 EOF
     flock -u 7
     bridge_profile wake_volumes
-    BRIDGE_VOICE_SNAPSHOT=$("$BRIDGE_DIR/lib/source-snapshot.sh" "$$" "${BRIDGE_MASTER_SAVED:-null}" "${BRIDGE_BT_SAVED:-null}" 2>/dev/null || printf '{"type":"voice_begin","pid":%s,"source":null,"uncertain":true}' "$$")
+    if ! BRIDGE_VOICE_SNAPSHOT=$("$BRIDGE_DIR/lib/source-snapshot.sh" "$$" "${BRIDGE_MASTER_SAVED:-null}" "${BRIDGE_BT_SAVED:-null}" 2>/dev/null); then
+        BRIDGE_VOICE_SNAPSHOT=$(printf '{"type":"voice_begin","pid":%s,"source":null,"uncertain":true}' "$$")
+    fi
     bridge_profile wake_snapshot
     "$BRIDGE_BIN" --emit "$BRIDGE_VOICE_SNAPSHOT" >/dev/null 2>&1 || true
     bridge_profile wake_event

@@ -556,7 +556,10 @@ int bridge_trace_pcm(const char *path, const char *cycle) {
                             snprintf(line, sizeof line,
                                      "pid=%ld phase=recording_first_output uptime=%.3f cycle=%s\n",
                                      (long)getpid(), at, cycle);
-                        (void)write(fd, line, (size_t)length);
+                        /* Best-effort trace failure must not drop microphone
+                         * bytes. Consume the result for fortified libc builds. */
+                        ssize_t logged = write(fd, line, (size_t)length);
+                        (void)logged;
                     }
                     if (clock)
                         fclose(clock);

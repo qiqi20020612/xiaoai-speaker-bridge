@@ -495,6 +495,52 @@ bridge_restore_volume
     assert (path / "before-journal").read_bytes() == (path / "after-journal").read_bytes()
 
 
+def test_failed_snapshot_output_is_discarded_before_safe_fallback(text_device, speaker_shell):
+    _, path, env = text_device
+    script(path / "bridge/lib/source-snapshot.sh", "#!/bin/sh\nprintf partial-json\nexit 1\n")
+    body = f'''. "{path / "bridge/lib/listener-hooks.sh"}"
+bridge_voice_begin || exit 70
+printf '%s\\n' "$BRIDGE_VOICE_SNAPSHOT" > "$STATE_DIR/observed-snapshot"
+bridge_restore_volume
+'''
+    result = subprocess.run(
+        [*speaker_shell, "-c", body],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=8,
+    )
+    assert result.returncode == 0, result.stderr
+    snapshot = json.loads((path / "observed-snapshot").read_text())
+    assert snapshot["source"] is None and snapshot["uncertain"] is True
+
+
+def test_failed_reply_output_never_precedes_the_structured_error(text_device, speaker_shell):
+    _, path, env = text_device
+    helper = path / "tools/failing-reply"
+    script(
+        helper,
+        f'''#!/bin/sh
+if [ "$2" = reply ]; then "{env["XIAOAI_BRIDGE_JSON_BIN"]}" "$@";exit 1;fi
+exec "{env["XIAOAI_BRIDGE_JSON_BIN"]}" "$@"
+''',
+    )
+    result = subprocess.run(
+        [
+            *speaker_shell,
+            str(path / "bridge/lib/text.sh"),
+            "send_text",
+            json.dumps({"text": "hello", "speak_response": False}),
+        ],
+        env={**env, "XIAOAI_BRIDGE_JSON_BIN": str(helper)},
+        capture_output=True,
+        text=True,
+        timeout=8,
+    )
+    assert result.returncode == 1
+    assert json.loads(result.stdout) == {"error": "result_serialization_failed"}
+
+
 @pytest.mark.parametrize("failure", ["profile", "owner"])
 def test_profile_failure_is_passive_but_voice_owner_failure_stops_recording(
     text_device, speaker_shell, failure
