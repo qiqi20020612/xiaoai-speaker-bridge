@@ -1,4 +1,16 @@
 #!/bin/sh
+# Shared read-only process identity, also used by the standalone installer.
+bridge_pid_start() {
+    # The comm field can contain spaces; strip it before selecting starttime.
+    [ -r "/proc/$1/stat" ] || return 1
+    sed 's/^.*) //' "/proc/$1/stat" | awk '{print $20}'
+}
+bridge_owner_alive() {
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$1" -gt 1 ] && kill -0 "$1" 2>/dev/null || return 1
+    [ -z "${2:-}" ] || [ "$2" = "$(bridge_pid_start "$1" 2>/dev/null)" ]
+}
+
 # BusyBox flock has no -w. Keep the kernel lock on the caller's inherited FD.
 # Poll once a second, with a monotonic deadline on Linux and a bounded fallback.
 bridge_lock_for() (

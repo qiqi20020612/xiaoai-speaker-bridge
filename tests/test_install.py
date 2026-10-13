@@ -750,3 +750,95 @@ def test_active_bridge_task_blocks_upgrade_before_services_stop(installation):
     result = call("--apply")
     assert result.returncode != 0 and "Bridge tasks are active" in result.stderr
     assert not calls.exists() and not (data / "xiaoai_bridge.backup").exists()
+
+
+@pytest.mark.parametrize("mode", ["--apply", "--rollback", "--uninstall"])
+@pytest.mark.parametrize(
+    "marker_format",
+    [
+        "legacy",
+        pytest.param(
+            "pid_starttime",
+            marks=pytest.mark.skipif(
+                not Path("/proc/self/stat").exists(),
+                reason="Actual Linux starttime markers are validated with BusyBox in CI",
+            ),
+        ),
+    ],
+)
+def test_installer_blocks_live_voice_markers_before_changing_state(
+    installation, speaker_shell, mode, marker_format
+):
+    call, data, cron, original_cron, original_boot, calls = installation
+    assert call("--apply").returncode == 0
+    runtime = data.parent / "runtime"
+    marker = runtime / "xiaoai_bridge.voice"
+    (data / "listener").write_text(
+        f'HA_TOKEN="synthetic-current"\n. {data}/xiaoai_bridge/lib/bootstrap.sh\n'
+        ". /data/kws_bootstrap.sh\n"
+    )
+    (data / "kws_bootstrap.sh").write_text("# original KWS selection\n")
+    before = {
+        p.relative_to(data): (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns)
+        for p in data.rglob("*")
+        if p.is_file()
+    }
+    before_calls = calls.read_bytes()
+    body = f'''. "{ROOT / "speaker/lib/common.sh"}"
+bridge_mark_owner "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
+printf 'ready\\n'
+read release
+'''
+    with subprocess.Popen(
+        [*speaker_shell, "-c", body],
+        env={
+            **os.environ,
+            "XIAOAI_BRIDGE_HELPER_DIR": str(ROOT / "speaker/lib"),
+            "XIAOAI_BRIDGE_RUNTIME": str(runtime),
+        },
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ) as owner:
+        try:
+            assert owner.stdout.readline() == "ready\n"
+            fields = marker.read_text().split()
+            assert fields[0] == str(owner.pid)
+            if marker_format == "legacy":
+                marker.write_text(f"{owner.pid}\n")
+            else:
+                assert len(fields) == 2 and fields[1].isdigit()
+            before_marker = marker.read_bytes()
+            result = call(mode)
+            assert result.returncode != 0, result.stdout + result.stderr
+            assert "Voice interaction is active" in result.stderr
+            assert calls.read_bytes() == before_calls
+            assert {
+                p.relative_to(data): (p.read_bytes(), p.stat().st_mode, p.stat().st_mtime_ns)
+                for p in data.rglob("*")
+                if p.is_file()
+            } == before
+            assert marker.read_bytes() == before_marker
+            assert not (runtime / "ha_oauth_refresh.lock").exists()
+        finally:
+            owner.stdin.close()
+            owner.wait(timeout=3)
+
+
+@pytest.mark.parametrize("stale_owner", ["exited", "pid_reuse"])
+def test_installer_ignores_stale_voice_owner_instances(installation, speaker_shell, stale_owner):
+    call, data, cron, original_cron, original_boot, calls = installation
+    marker = data.parent / "runtime/xiaoai_bridge.voice"
+    if stale_owner == "pid_reuse":
+        if not Path("/proc/self/stat").exists():
+            pytest.skip("Linux PID starttime is validated with BusyBox in CI")
+        # This PID is alive but never has the zero starttime in the stale marker.
+        marker.write_text(f"{os.getpid()} 0\n")
+    else:
+        with subprocess.Popen([*speaker_shell, "-c", "exit 0"]) as old:
+            old.wait(timeout=3)
+            marker.write_text(f"{old.pid} 1\n")
+    result = call("--apply")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (data / "xiaoai_bridge.backup/status").read_text().strip() == "installed"

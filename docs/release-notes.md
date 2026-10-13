@@ -6,6 +6,7 @@ Release 提供 LX06 安装包、HA ZIP、`RELEASE_NOTES.md` 和 `SHA256SUMS`。�
 - review format=3：用本版 prepare_adapters.py 从未修改的 Launcher、kws_guard 和 AirPlay LED 原件重新生成三个私有副本，核验原始字节 SHA256、输出 SHA256 和完整顺序；不更改设备原 KWS client/guard、OAuth、Agent 或 TTS 脚本。
 - 音量恢复记录逐通道保存，锁或硬件失败也释放音频/语音/LED所有权；对已改变的 AirPlay 发送端目标保守恢复，新 HA 音量目标优先。目标仍与临时 cap 无法区分时保留 pending，不猜测硬件映射。
 - 安装事务协调原 OAuth Cron 的目录锁、新配置 FD、原 Listener/Bridge 写入与实际初始化就绪；等待刷新后重新读取已轮换凭据；初始化 401 不被安装锁阻断。恢复保留旧二进制、私有适配、enable、KWS 和当前 OAuth。
+- 安装、回滚、卸载兼容旧单 PID 和新 PID/starttime 语音占用标记，拒绝活跃语音时不修改事务状态或停止服务；启动时间校验防止遗留标记误认重用的 PID。
 - 保护完整 AirPlay draw/restore 与后台 worker；清理过期 worker 目录；远程任务与语音共享 LED 锁，语音优先。原 ledserver、KWS离线灯和物理按键仍须实测。
 - 音频任务清理宽限 20 秒；probe 原 5 秒宽限和启动重试预算保留。boot 完成后的 Cron 仅恢复 Bridge daemon，不重复原音频启动流程或启动被用户停止的 Listener。
 - 保留 protocol=1、原 HA 实体身份、上下文和便捷操作；新 ducking capability 防止 HA 先升级时发送旧 Bridge 未支持的新选项。task_led、announcement_ducking 均默认关闭。
