@@ -21,11 +21,7 @@ fi
 if flag '.enable_listener_adapter'; then
     [ -x "$adapter" ] || exit 1
     # Already running the reviewed sibling: do not restart the microphone.
-    if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" ]; then
-        read owner < "$BRIDGE_RUNTIME/xiaoai_bridge.voice_ready" || owner=0
-        case "$owner" in ''|*[!0-9]*) owner=0 ;; esac
-        hooks_ready && exit 0
-    fi
+    hooks_ready && exit 0
     if /etc/init.d/listener status >/dev/null 2>&1; then
         SILENT=1 /etc/init.d/listener stop || exit 1
         wait_listener_exit || exit 1

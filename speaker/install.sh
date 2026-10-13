@@ -98,9 +98,9 @@ retain() {
 }
 voice_idle() {
     [ -r "$RUNTIME/xiaoai_bridge.voice" ] || return 0
-    read voice_pid < "$RUNTIME/xiaoai_bridge.voice" || return 0
-    case "$voice_pid" in ''|*[!0-9]*) return 0 ;; esac
-    if [ "$voice_pid" -gt 1 ] && kill -0 "$voice_pid" 2>/dev/null;then
+    # 0.1.3 writes PID alone; new hooks write PID plus Linux starttime.
+    read -r voice_pid voice_start < "$RUNTIME/xiaoai_bridge.voice" || return 0
+    if bridge_owner_alive "$voice_pid" "$voice_start";then
         printf '%s\n' 'Voice interaction is active; retry when idle' >&2
         return 1
     fi
@@ -272,6 +272,8 @@ trap 'bridge_oauth_leave' 0
 trap 'exit 143' HUP INT TERM
 exec 4> "$RUNTIME/xiaoai_bridge.config.lock"
 bridge_lock_for 35 4 || exit 1
+# Refuse before rollback/uninstall can change transaction metadata as well.
+voice_idle || exit 1
 
 if [ "$MODE" = --rollback ];then
     [ -d "$BACKUP" ] || { printf '%s\n' 'No backup exists; use --uninstall to detach a partial installation';exit 1; }
