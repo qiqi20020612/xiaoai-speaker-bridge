@@ -228,6 +228,76 @@ def test_tts_playing_observes_direct_provider_exec(text_device, player):
     assert stages == ["synthesizing", "playing"]
 
 
+def simulate_tts_proc(path, player, children_available=False, exit_code=0):
+    # Redirect only this fixture's TTS inspection; production /proc is untouched.
+    pipeline = path / "bridge/lib/text.sh"
+    pipeline.write_text(pipeline.read_text().replace("/proc/", str(path / "proc") + "/"))
+    children = (
+        'mkdir -p "$STATE_DIR/proc/$$/task/$$"\n: > "$STATE_DIR/proc/$$/task/$$/children"\n'
+        if children_available
+        else ""
+    )
+    script(
+        path / "existing-tts",
+        '#!/bin/sh\nmkdir -p "$STATE_DIR/proc/$$"\n'
+        'printf "provider\\n" > "$STATE_DIR/proc/$$/comm"\n'
+        + children
+        + f'sleep 0.15\nexec "$STATE_DIR/tools/{player}"\n',
+    )
+    script(
+        path / "tools" / player,
+        f'#!/bin/sh\nprintf "{player}\\n" > "$STATE_DIR/proc/$$/comm"\n'
+        f"sleep 0.4\nexit {exit_code}\n",
+    )
+
+
+@pytest.mark.parametrize("player", ["miplay", "mpg123", "ogg123", "aplay"])
+@pytest.mark.parametrize("children_available", [False, True])
+def test_tts_direct_player_stage_and_volume_restore_with_optional_children(
+    text_device, player, children_available
+):
+    call, path, _ = text_device
+    simulate_tts_proc(path, player, children_available)
+    result, payload = call("announce", "synthetic", volume=20)
+    assert result.returncode == 0 and payload == {"reply_text": ""}
+    stages = [json.loads(line)["stage"] for line in result.stdout.splitlines() if '"stage"' in line]
+    assert stages == ["synthesizing", "playing"]
+    assert (path / "mixer-writes").read_text().splitlines() == [
+        "notifyvol 20%",
+        "notifyvol 60%",
+    ]
+    assert not (path / "xiaoai_bridge.tts-volume.json").exists()
+    for name in ("audio", "volume"):
+        with (path / f"xiaoai_bridge.{name}.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_tts_without_children_does_not_report_unrelated_player(text_device):
+    call, path, _ = text_device
+    simulate_tts_proc(path, "synthetic-provider")
+    unrelated = path / "proc/99999999"
+    unrelated.mkdir(parents=True)
+    (unrelated / "comm").write_text("miplay\n")
+    result, _ = call("announce", "synthetic")
+    assert result.returncode == 0
+    stages = [json.loads(line)["stage"] for line in result.stdout.splitlines() if '"stage"' in line]
+    assert stages == ["synthesizing"]
+
+
+def test_tts_direct_player_failure_without_children_restores_volume(text_device):
+    call, path, _ = text_device
+    simulate_tts_proc(path, "miplay", exit_code=1)
+    result, payload = call("announce", "synthetic", volume=20)
+    assert result.returncode != 0 and payload == {"error": "tts_failed"}
+    stages = [json.loads(line)["stage"] for line in result.stdout.splitlines() if '"stage"' in line]
+    assert stages == ["synthesizing", "playing"]
+    assert (path / "mixer-writes").read_text().splitlines() == [
+        "notifyvol 20%",
+        "notifyvol 60%",
+    ]
+    assert not (path / "xiaoai_bridge.tts-volume.json").exists()
+
+
 @pytest.mark.skipif(
     not Path("/proc/self/stat").exists(), reason="Linux KWS identity is validated in CI"
 )

@@ -31,9 +31,9 @@ HA 配置中的“播报时压低背景音乐”默认关闭；开启后上限�
 
 ## 文本输入隐私
 
-新增 text 输入仅用于非敏感内容，最多 255 个字符，这是 HA State Machine 的限制；较长文本仍使用原服务（4096 字节）。输入不执行动作，只有点击发送才调用 `xiaoai_speaker.announce`/`send_text`。回复播报与共享上下文开关初始均为 true，本轮开关/输入存于内存，集成重载后恢复默认。
+原生 text 操作仅用于非敏感内容，最多 255 个字符，这是 HA State Machine 的限制；较长文本仍使用原服务（4096 字节）。「播放文字」提交即调用 `xiaoai_speaker.announce`，「执行文字指令」提交即调用 `xiaoai_speaker.send_text`，不需要独立发送按钮。提交成功后清空，任务结束后可以再次提交相同文字；空白、NUL 和超长输入拒绝。回复播报与共享上下文开关初始均为 true，开关/输入存于内存，集成重载后恢复默认。交互参考 [Xiaomi Miot 的 TextEntity 动作设计](https://github.com/al-one/hass-xiaomi-miot/blob/master/custom_components/xiaomi_miot/text.py)，执行仍通过本集成原有服务与队列。
 
-原生 TextEntity 显示文本，文本会进入状态、服务事件、自动化和可能的日志/Recorder。输入使用 Password 模式也不能把这些渠道变成安全存储。发送后清空只是方便下一次输入，不删除历史。集成诊断不导出输入、回复或 token。
+提交值经过 HA 服务，可能进入服务事件、自动化和日志；旧版已保存的文本状态及历史也不会被删除。输入使用 Password 模式也不能把这些渠道变成安全存储。提交后清空只是方便下一次输入，不删除历史。集成诊断不导出输入、回复或 token。
 
 在输入前配置 Recorder 排除**实际的两个 text Entity ID**，例如：
 
@@ -41,15 +41,29 @@ HA 配置中的“播报时压低背景音乐”默认关闭；开启后上限�
 recorder:
   exclude:
     entities:
-      - text.your_speaker_announcement_text_non_sensitive
-      - text.your_speaker_conversation_text_non_sensitive
+      - text.your_speaker_play_text
+      - text.your_speaker_execute_text_directive
 ```
 
 排除状态不能保证服务事件、日志、外部自动化或已有历史均无文本。敏感任务应关闭/不使用这些输入，并按自己的 HA 数据保留策略处理已有历史。更长/敏感输入使用原服务也不获得“不留痕”保证。
 
 ## 实体迁移
 
-新安装只创建有使用价值的来源/AirPlay 状态和控制入口。资源、队列、job_status、会话剩余秒数、不确定性默认禁用；发送按钮属性提供该入口的任务状态、request_id 和错误码。Bridge API/诊断保留原始资源及 AirPlay dB。
+新安装只创建有使用价值的来源/AirPlay 状态和控制入口。资源、队列、job_status、会话剩余秒数、不确定性默认禁用；两个文本实体属性提供各自的任务状态、request_id 和错误码。Bridge API/诊断保留原始资源及 AirPlay dB。
+
+HA 侧更新保留 `announce_text` / `send_text_text` 原 unique_id、用户自定义 Entity ID 和启用选择；仅移除当前集成条目的 `announce_send` / `send_text_send` 旧按钮注册，其他按钮、实体和配置保留。现有 `xiaoai_speaker.announce` / `send_text` 服务自动化不变。曾用旧 `button.press` 发送的自动化需改为直接调用原服务，或用以下原生操作（换成原有实际 Entity ID）：
+
+```yaml
+action: text.set_value
+target:
+  entity_id: text.your_speaker_execute_text_directive
+data:
+  value: "打开客厅灯"
+```
+
+此控件调整只更新 HA 集成文件，按正常流程重启 HA 后使用；音箱端无需更新或重新生成适配器。
+
+离线、能力缺失或状态过期时文本实体显示 unavailable，不派发任务。HA 原生 `text.set_value` 会跳过不可用目标并记录警告；原 `xiaoai_speaker.announce` / `send_text` 服务仍按原逻辑抛出错误。繁忙和无效输入在可用文本控件中正常报错，未改 HA 的原生服务分发机制。
 
 如果 registry 已有 bridge_peak_rss、memory_total、airplay_raw_volume，仍注册同一 unique_id/Entity ID 并保留 enabled/disabled 选择。其他诊断实体更改默认策略也不覆盖已有 registry 设置。用户确认没有自动化依赖后可自行移除兼容实体；集成不自动删除或改名。
 

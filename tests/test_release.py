@@ -5,6 +5,7 @@ import json
 import shutil
 import struct
 import subprocess
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -15,6 +16,31 @@ import yaml
 
 from tools.package_speaker import validate_arm_elf
 from tools.release import ROOT, package, publish, validate_tag, verify_assets, version
+
+
+def test_metadata_generator_reproduces_checked_in_catalogs(tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    generator = tools / "generate_metadata.py"
+    shutil.copy2(ROOT / "tools/generate_metadata.py", generator)
+    component = Path("custom_components/xiaoai_speaker")
+    (tmp_path / component / "translations").mkdir(parents=True)
+    files = [
+        component / name
+        for name in (
+            "services.yaml",
+            "strings.json",
+            "translations/en.json",
+            "translations/zh-Hans.json",
+        )
+    ]
+    # Execute the real tool only in an isolated tree, including a second run.
+    for _ in range(2):
+        subprocess.run(
+            [sys.executable, str(generator)], check=True, capture_output=True, timeout=10
+        )
+        for relative in files:
+            assert (tmp_path / relative).read_bytes() == (ROOT / relative).read_bytes(), relative
 
 
 def synthetic_arm():

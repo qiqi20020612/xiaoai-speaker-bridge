@@ -144,10 +144,10 @@
     },
     "text": {
       "announce_text": {
-        "name": "Announcement text (non-sensitive)"
+        "name": "Play text"
       },
       "send_text_text": {
-        "name": "Conversation text (non-sensitive)"
+        "name": "Execute text directive"
       }
     },
     "button": {
@@ -159,12 +159,6 @@
       },
       "restart_listener": {
         "name": "Restart listening"
-      },
-      "announce_send": {
-        "name": "Announce entered text"
-      },
-      "send_text_send": {
-        "name": "Send entered conversation text"
       }
     },
     "select": {

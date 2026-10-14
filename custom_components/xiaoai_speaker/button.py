@@ -5,18 +5,24 @@ import uuid
 from homeassistant.components.button import ButtonEntity
 from homeassistant.const import EntityCategory
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 
 from .client import BridgeError
+from .const import DOMAIN
 from .entity import XiaoAIEntity, register_capability_entities
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
     c = entry.runtime_data.coordinator
+    registry = er.async_get(hass)
+    obsolete = {f"{entry.unique_id}_{kind}_send" for kind in ("announce", "send_text")}
+    for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if entity.domain == "button" and entity.platform == DOMAIN and entity.unique_id in obsolete:
+            registry.async_remove(entity.entity_id)
     register_capability_entities(
         entry,
         async_add_entities,
-        [ManagementButton(c, key) for key in ("refresh", "reset_context", "restart_listener")]
-        + [SendButton(c, kind) for kind in ("announce", "send_text")],
+        [ManagementButton(c, key) for key in ("refresh", "reset_context", "restart_listener")],
     )
 
 
@@ -47,24 +53,3 @@ class ManagementButton(XiaoAIEntity, ButtonEntity):
                 await self.coordinator.async_request_refresh()
         except BridgeError as err:
             raise HomeAssistantError(err.code) from None
-
-
-class SendButton(XiaoAIEntity, ButtonEntity):
-    def __init__(self, coordinator, kind):
-        super().__init__(coordinator, f"{kind}_send")
-        self.kind = kind
-        self.required_capability = ("announce" if kind == "announce" else "conversation",)
-        self._attr_translation_key = f"{kind}_send"
-
-    @property
-    def extra_state_attributes(self):
-        job = self.coordinator.jobs.jobs.get(self.coordinator.quick.requests.get(self.kind))
-        return {
-            "status": job.status if job is not None else "idle",
-            "request_id": job.request_id if job is not None else None,
-            "error": job.result.get("error") if job is not None else None,
-        }
-
-    async def async_press(self):
-        self.require_available()
-        await self.coordinator.quick.send(self.kind, self.entity_id, self._context)
