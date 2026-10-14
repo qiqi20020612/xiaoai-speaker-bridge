@@ -213,6 +213,10 @@ read hold
 
 def test_original_airplay_guard_yields_and_replays_after_native_task(native_led, speaker_shell):
     _, path, env = native_led
+    script(
+        path / "tools/dbus-send",
+        "#!/bin/sh\nprintf 'string \"Active\"\\nvariant boolean true\\n'\n",
+    )
     adapter = path / "bridge/adapter/airplay-led.sh"
     adapter.parent.mkdir()
     led = path / "airplay-rgb"
@@ -369,6 +373,10 @@ def test_voice_preemption_defers_airplay_replay_until_voice_ends(
     native_led, speaker_shell, task_alive, led_failure
 ):
     _, path, env = native_led
+    script(
+        path / "tools/dbus-send",
+        "#!/bin/sh\nprintf 'string \"Active\"\\nvariant boolean true\\n'\n",
+    )
     adapter = path / "bridge/adapter/airplay-led.sh"
     adapter.parent.mkdir()
     script(
@@ -461,6 +469,29 @@ bridge_restore_volume
             if proc is not None and proc.poll() is None:
                 proc.terminate()
                 proc.communicate(timeout=6)
+
+
+@pytest.mark.parametrize("activity", ["true", "false", "unavailable"])
+def test_replay_requires_current_airplay_activity_not_just_saved_volume(native_led, activity):
+    call, path, _ = native_led
+    adapter = path / "bridge/adapter/airplay-led.sh"
+    adapter.parent.mkdir()
+    script(adapter, '#!/bin/sh\nprintf "%s\\n" "$1" >> "$STATE_DIR/airplay-replayed"\n')
+    (path / "airplay_led.last").write_text("-18 40\n")
+    script(
+        path / "tools/dbus-send",
+        "#!/bin/sh\n"
+        + (
+            "exit 1\n"
+            if activity == "unavailable"
+            else f"printf 'string \"Active\"\\nvariant boolean {activity}\\n'\n"
+        ),
+    )
+    result, _ = call("announce", "synthetic speech")
+    assert result.returncode == 0
+    assert (path / "native-led-calls").read_text().splitlines() == SEQUENCE
+    assert (path / "airplay-replayed").exists() is (activity == "true")
+    assert not (path / "xiaoai_bridge.feedback").exists()
 
 
 @pytest.fixture

@@ -13,6 +13,10 @@ bridge_feedback_restore_airplay() {
     voice_busy && return 0
     feedback_busy && return 0
     if [ -x "$BRIDGE_DIR/adapter/airplay-led.sh" ] && [ -r "$BRIDGE_RUNTIME/airplay_led.last" ]; then
+        # The saved event survives disconnects. Reuse the bounded read-only
+        # activity query; inactive/unknown AirPlay must leave native lamps off.
+        feedback_airplay=$(dbus_get_all org.gnome.ShairportSync || true)
+        [ "$(printf '%s' "$feedback_airplay" | dbus_property Active)" = true ] || return 0
         read feedback_raw feedback_pct < "$BRIDGE_RUNTIME/airplay_led.last" || return 0
         # The reviewed adapter checks the same LED lock and owners again.
         "$BRIDGE_DIR/adapter/airplay-led.sh" "$feedback_raw" \
