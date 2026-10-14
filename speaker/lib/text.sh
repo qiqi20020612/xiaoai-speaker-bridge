@@ -149,27 +149,25 @@ speak() {
     bridge_profile tts_launch
     "$TTS_PATH" "$utterance" > /dev/null 2>&1 &
     tts_pid=$!
-    # Only inspect descendants of this TTS invocation; other media never implies playing.
+    # Inspect this invocation even when the kernel omits the children interface.
+    # Descendants are optional; unrelated media never implies playing.
     while kill -0 "$tts_pid" 2>/dev/null; do
-        if [ -r "/proc/$tts_pid/task/$tts_pid/children" ]; then
-            children=$(cat "/proc/$tts_pid/task/$tts_pid/children")
-            pending="$tts_pid $children"
-            playing=false
-            visited=0
-            while [ -n "$pending" ] && [ "$visited" -lt 64 ]; do
-                next=''
-                for child in $pending; do
-                    case "$child" in *[!0-9]*|'') continue ;; esac
-                    visited=$((visited+1))
-                    comm=$(cat "/proc/$child/comm" 2>/dev/null || true)
-                    case "$comm" in miplay|mpg123|ogg123|aplay) playing=true;break ;; esac
-                    next="$next $(cat "/proc/$child/task/$child/children" 2>/dev/null || true)"
-                done
-                [ "$playing" = true ] && break
-                pending=$next
+        pending=$tts_pid
+        playing=false
+        visited=0
+        while [ -n "$pending" ] && [ "$visited" -lt 64 ]; do
+            next=''
+            for child in $pending; do
+                case "$child" in *[!0-9]*|'') continue ;; esac
+                visited=$((visited+1))
+                comm=$(cat "/proc/$child/comm" 2>/dev/null || true)
+                case "$comm" in miplay|mpg123|ogg123|aplay) playing=true;break ;; esac
+                next="$next $(cat "/proc/$child/task/$child/children" 2>/dev/null || true)"
             done
-            if [ "$playing" = true ]; then printf '{"stage":"playing"}\n';bridge_feedback_stage playing;bridge_profile tts_playing;break;fi
-        fi
+            [ "$playing" = true ] && break
+            pending=$next
+        done
+        if [ "$playing" = true ]; then printf '{"stage":"playing"}\n';bridge_feedback_stage playing;bridge_profile tts_playing;break;fi
         sleep 0.25
     done
     result=0;wait "$tts_pid" || result=$?
