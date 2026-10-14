@@ -539,10 +539,15 @@ def test_real_c_cancellation_and_timeout_clean_native_led_and_volume(
     wait_for(lambda: (path / "tts-active").exists())
     if reason == "cancel":
         assert call("/api/jobs/native-cleanup/cancel", {})[0] == 200
-    wait_for(lambda: not (runtime / "xiaoai_bridge.feedback").exists())
+    # task_timeout starts termination; it is not the cleanup deadline. The fast
+    # Linux fixture reaches TTS almost immediately, so waiting exactly eight
+    # seconds can expire before the next event-loop tick and TERM cleanup.
+    wait_for(lambda: not (runtime / "xiaoai_bridge.feedback").exists(), timeout=15)
     wait_for(lambda: call("/api/jobs/native-cleanup")[1]["status"] in ("cancelled", "failed"))
-    status = call("/api/jobs/native-cleanup")[1]["status"]
-    assert status == ("cancelled" if reason == "cancel" else "failed")
+    job = call("/api/jobs/native-cleanup")[1]
+    assert job["status"] == ("cancelled" if reason == "cancel" else "failed")
+    if reason == "timeout":
+        assert job["error"] == "task_timeout"
     assert (path / "native-led-calls").read_text().splitlines() == SEQUENCE
     assert (path / "mixer-writes").read_text().splitlines() == ["notifyvol 20%", "notifyvol 60%"]
     assert not (runtime / "xiaoai_bridge.tts-volume.json").exists()
