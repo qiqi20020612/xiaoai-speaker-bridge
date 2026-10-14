@@ -18,16 +18,16 @@ class QuickControls:
     def changed(self):
         self.coordinator._job_changed()
 
-    async def send(self, kind, entity_id, context):
+    async def send(self, kind, entity_id, context, *, text=None):
         if kind in self.pending:
             raise HomeAssistantError("quick_action_busy")
         previous = self.coordinator.jobs.jobs.get(self.requests.get(kind))
         if previous is not None and not previous.done.is_set():
             raise HomeAssistantError("quick_action_busy")
-        text = self.texts[kind]
-        if not text.strip():
+        text = self.texts[kind] if text is None else text
+        if not isinstance(text, str) or not text.strip():
             raise HomeAssistantError("invalid_text")
-        # Claim synchronously before awaiting so rapid clicks cannot duplicate a task.
+        # Claim synchronously before awaiting so rapid submissions cannot duplicate a task.
         self.pending.add(kind)
         request_id = uuid.uuid4().hex
         try:
@@ -38,8 +38,7 @@ class QuickControls:
                 DOMAIN, kind, payload, blocking=True, return_response=True, context=context
             )
             self.requests[kind] = request_id
-            if self.texts[kind] == text:
-                self.texts[kind] = ""
+            self.texts[kind] = ""
             self.changed()
         finally:
             self.pending.discard(kind)

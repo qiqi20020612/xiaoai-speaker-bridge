@@ -28,9 +28,18 @@ class InstructionText(XiaoAIEntity, TextEntity):
     def native_value(self):
         return self.coordinator.quick.texts[self.kind]
 
+    @property
+    def extra_state_attributes(self):
+        job = self.coordinator.jobs.jobs.get(self.coordinator.quick.requests.get(self.kind))
+        return {
+            "status": job.status if job is not None else "idle",
+            "request_id": job.request_id if job is not None else None,
+            "error": job.result.get("error") if job is not None else None,
+        }
+
     async def async_set_value(self, value):
         self.require_available()
-        if not isinstance(value, str) or len(value) > 255 or "\0" in value:
+        if not isinstance(value, str) or not value.strip() or len(value) > 255 or "\0" in value:
             raise HomeAssistantError("invalid_text")
-        self.coordinator.quick.texts[self.kind] = value
+        await self.coordinator.quick.send(self.kind, self.entity_id, self._context, text=value)
         self.async_write_ha_state()

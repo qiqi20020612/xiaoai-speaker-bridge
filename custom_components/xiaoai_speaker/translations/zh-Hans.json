@@ -144,10 +144,10 @@
     },
     "text": {
       "announce_text": {
-        "name": "播报文本（仅限非敏感内容）"
+        "name": "播放文字"
       },
       "send_text_text": {
-        "name": "对话文本（仅限非敏感内容）"
+        "name": "执行文字指令"
       }
     },
     "button": {
@@ -159,12 +159,6 @@
       },
       "restart_listener": {
         "name": "重启监听"
-      },
-      "announce_send": {
-        "name": "播报输入文本"
-      },
-      "send_text_send": {
-        "name": "发送输入对话"
       }
     },
     "select": {

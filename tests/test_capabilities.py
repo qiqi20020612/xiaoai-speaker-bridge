@@ -1,5 +1,6 @@
 """Real HA entity/registry/service behavior across device capability transitions."""
 
+import asyncio
 import copy
 from unittest.mock import AsyncMock, patch
 
@@ -114,38 +115,69 @@ async def test_legacy_sensor_ids_and_manual_enabled_choice_are_preserved(hass, m
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_quick_inputs_only_send_on_click_use_services_and_block_duplicate(hass, mock_clients):
+@pytest.mark.parametrize("kind", ["announce", "send_text"])
+async def test_quick_text_submits_once_and_repeats_after_completion(hass, mock_clients, kind):
     entry, c = await setup(hass)
     registry = er.async_get(hass)
-    text_id = registry.async_get_entity_id("text", DOMAIN, "synthetic-speaker_send_text_text")
-    button = registry.async_get_entity_id("button", DOMAIN, "synthetic-speaker_send_text_send")
+    text_id = registry.async_get_entity_id("text", DOMAIN, f"synthetic-speaker_{kind}_text")
+    assert registry.async_get_entity_id("button", DOMAIN, f"synthetic-speaker_{kind}_send") is None
     speak = registry.async_get_entity_id("switch", DOMAIN, "synthetic-speaker_speak_response")
     context = registry.async_get_entity_id("switch", DOMAIN, "synthetic-speaker_use_context")
     assert hass.states.get(speak).state == hass.states.get(context).state == "on"
-    with patch.object(c.jobs, "submit", wraps=c.jobs.submit) as submit:
+    await hass.services.async_call("switch", "turn_off", {"entity_id": speak}, blocking=True)
+    c.quick.texts[kind] = "stale buffered text"
+    finish = asyncio.Event()
+
+    async def execute(*args):
+        await finish.wait()
+        return {"status": "completed", "reply_text": "synthetic reply"}
+
+    with (
+        patch.object(c.client, "submit", AsyncMock(side_effect=execute)) as execute_job,
+        patch.object(c.jobs, "submit", wraps=c.jobs.submit) as submit,
+    ):
         await hass.services.async_call(
             "text",
             "set_value",
             {"entity_id": text_id, "value": "synthetic non-sensitive instruction"},
             blocking=True,
         )
-        submit.assert_not_called()
-        await hass.services.async_call("switch", "turn_off", {"entity_id": speak}, blocking=True)
-        await hass.services.async_call("button", "press", {"entity_id": button}, blocking=True)
         assert submit.call_count == 1
-        assert submit.call_args.args[0] == "send_text"
-        assert submit.call_args.args[1]["speak_response"] is False
-        assert submit.call_args.args[1]["use_context"] is True
+        assert submit.call_args.args[0] == kind
+        assert submit.call_args.args[1]["text"] == "synthetic non-sensitive instruction"
+        if kind == "send_text":
+            assert submit.call_args.args[1]["speak_response"] is False
+            assert submit.call_args.args[1]["use_context"] is True
         assert hass.states.get(text_id).state == ""
+        first_id = c.quick.requests[kind]
+        assert hass.states.get(text_id).attributes["request_id"] == first_id
+        assert hass.states.get(text_id).attributes["status"] in ("accepted", "running")
+        with pytest.raises(HomeAssistantError, match="quick_action_busy"):
+            await hass.services.async_call(
+                "text",
+                "set_value",
+                {"entity_id": text_id, "value": "another instruction"},
+                blocking=True,
+            )
+        assert submit.call_count == 1
+        finish.set()
+        async with asyncio.timeout(2):
+            await c.jobs.jobs[first_id].done.wait()
         await hass.services.async_call(
             "text",
             "set_value",
-            {"entity_id": text_id, "value": "another instruction"},
+            {"entity_id": text_id, "value": "synthetic non-sensitive instruction"},
             blocking=True,
         )
-        with pytest.raises(HomeAssistantError, match="quick_action_busy"):
-            await hass.services.async_call("button", "press", {"entity_id": button}, blocking=True)
-        assert submit.call_count == 1
+        second_id = c.quick.requests[kind]
+        async with asyncio.timeout(2):
+            await c.jobs.jobs[second_id].done.wait()
+        assert submit.call_count == execute_job.call_count == 2
+        assert first_id != second_id and not c.quick.pending
+        assert hass.states.get(text_id).state == ""
+        assert hass.states.get(text_id).attributes["status"] == "completed"
+        assert hass.states.get(text_id).attributes["request_id"] == second_id
+        assert hass.states.get(text_id).attributes["error"] is None
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -160,22 +192,20 @@ async def test_native_text_privacy_is_explicit_and_recorder_filter_excludes_stat
     registry = er.async_get(hass)
     text_id = registry.async_get_entity_id("text", DOMAIN, "synthetic-speaker_announce_text")
     marker = "synthetic-private-marker"
-    await hass.services.async_call(
-        "text", "set_value", {"entity_id": text_id, "value": marker}, blocking=True
-    )
-    assert (
-        hass.states.get(text_id).state == marker
-    )  # Never claim native TextEntity is secret storage.
+    with patch.object(c.jobs, "submit", wraps=c.jobs.submit) as submit:
+        await hass.services.async_call(
+            "text", "set_value", {"entity_id": text_id, "value": marker}, blocking=True
+        )
+        assert submit.call_count == 1 and submit.call_args.args[1]["text"] == marker
+    assert hass.states.get(text_id).state == ""
     recorder_filter = generate_filter([], [], [], [text_id])
     assert not recorder_filter(text_id)
     assert recorder_filter("media_player.synthetic_speaker")
     assert marker not in str(await async_get_config_entry_diagnostics(hass, entry))
-    await hass.services.async_call(
-        "text", "set_value", {"entity_id": text_id, "value": ""}, blocking=True
-    )
-    button = registry.async_get_entity_id("button", DOMAIN, "synthetic-speaker_announce_send")
     with pytest.raises(HomeAssistantError, match="invalid_text"):
-        await hass.services.async_call("button", "press", {"entity_id": button}, blocking=True)
+        await hass.services.async_call(
+            "text", "set_value", {"entity_id": text_id, "value": ""}, blocking=True
+        )
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
