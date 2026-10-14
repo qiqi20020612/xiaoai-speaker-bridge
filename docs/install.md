@@ -8,7 +8,7 @@
 
 从 [GitHub Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases) 下载同一版本的 LX06 ARM EABI5 hard-float 安装包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS`。没有正式发版的构建可使用 CI 的 `generic-two-end-packages`。包中没有配置令牌或具体设备的适配副本；只有 LX06 实测兼容，其他型号独立验证。
 
-在下载目录执行 `sha256sum --check SHA256SUMS`（macOS 使用 `shasum -a 256 --check SHA256SUMS`），全部通过后再准备部署副本。本轮升级和回滚另见[0.1.6 升级与复验说明](lx06-v016.md)。
+在下载目录执行 `sha256sum --check SHA256SUMS`（macOS 使用 `shasum -a 256 --check SHA256SUMS`），全部通过后再准备部署副本。当前 v0.1.6 → v0.1.7 原地升级和回滚见 [原生灯效说明](lx06-v017.md)；更早格式迁移见 [0.1.6 记录](lx06-v016.md)。
 
 也可以使用校验过的 Zig 0.14.1 交叉编译器：
 
@@ -44,7 +44,7 @@ python3 speaker/tools/prepare_adapters.py \
 
 审核通过后，将私有生成目录放入**本机私有部署副本** `xiaoai_bridge/adapter/`。不要上传这份混合了本机原脚本的副本。通用包的 `SHA256SUMS` 核验通用文件；安装后使用 `INSTALLED_SHA256SUMS` 核验已部署通用文件，boot 单独按包内哈希核验；`review.json` 单独核验私有生成文件。
 
-若已经启用旧 AirPlay LED 保护，升级预览可能提示 active guard 与新副本不匹配。此时先运行**仍在工作的旧安装目录** `tools/activate_airplay_led.sh --remove` 恢复原 LED 程序，再安装新包；升级后按第 5 节审核启用新版保护。不要在旧保护仍引用旧 review 时直接替换其适配副本。升级期间保持 `verified.task_led=false`，只在新版保护验证后开启；该开关默认关闭，不改变旧手动灯光验证。
+若已经启用旧 AirPlay LED 保护，升级预览可能提示 active guard 与新副本不匹配。此时先运行**仍在工作的旧安装目录** `tools/activate_airplay_led.sh --remove` 恢复原 LED 程序，再安装新包；升级后按第 5 节审核启用新版保护。不要在旧保护仍引用旧 review 时直接替换其适配副本。v0.1.7 自动使用原生任务灯效，旧灯效验证字段被忽略；匹配的 v0.1.6 格式 4 / guard 3 可直接保留，无需重写配置或重新启用 Guard。
 
 ## 3. 日后在 LX06 上预览及安装
 
@@ -104,7 +104,7 @@ sh /data/xiaoai_bridge/tools/activate_airplay_led.sh --apply
 
 该独立操作用原 LED 程序的审阅副本加入语音退让逻辑，保留原亮度/颜色/音量映射与防抖。它核验输入、输出哈希并备份原程序，**不触碰 Shairport 配置、hook 路径、软件音量方案或 AirPlay 音频服务**。变更仅作用于 LED 程序，不能当作 AirPlay 反向控制已验证。
 
-`--remove` 只在当前程序与已审阅版本匹配时恢复原 LED 程序。检测到其他更新则停止，要求审阅合并，防止覆盖新的本机改动。安装器卸载/回滚会先移除 LED 保护再移除桥接目录。
+`--remove` 只在当前程序与已审阅版本匹配时恢复原 LED 程序。检测到其他更新则停止，要求审阅合并，防止覆盖新的本机改动。卸载会移除 LED 保护；回滚保留与旧 Bridge 适配器精确匹配、哈希有效的 Guard，旧快照不包含匹配副本时才恢复原 LED 程序。
 
 ## 6. 添加 HA 端
 
@@ -112,7 +112,7 @@ HACS 自定义仓库填写本仓库 URL，类型选 Integration。安装并重�
 
 在 HA 添加集成，读取**本机** `config.json` 的随机桥接 token 配对。不要填写 SSH 密码或复制 HA 长期 token。选项配置轮询间隔、来源优先级和空闲音量对象。Agent select 默认禁用，可在高级实体中启用；`device_default` 使用原配置，其他 Agent 的上下文与默认 Agent 隔离。
 
-经过实际手机音量同步/播放控制、蓝牙、LED、IR 测试后，才分别修改本地 `verified` 标志并重新加载集成，让对应实体出现。`verified=true` 是安装者记录的验证结果，不是检测到方法名后的自动推断。
+经过实际手机音量同步/播放控制、蓝牙、IR 测试后，才分别修改这些能力的本地 `verified` 标志并重新加载集成，让对应实体出现。原生任务灯效默认可用，不提供独立灯光实体或验证开关。`verified=true` 是安装者记录的验证结果，不是检测到方法名后的自动推断。
 
 ## 7. 启停、开机及回滚
 

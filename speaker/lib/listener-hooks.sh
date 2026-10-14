@@ -25,6 +25,7 @@ bridge_voice_detected() {
 }
 
 bridge_voice_begin() {
+    BRIDGE_PREEMPTED_FEEDBACK_OWNER='';BRIDGE_PREEMPTED_FEEDBACK_START=''
     [ "${BRIDGE_WAKE_DETECTED:-0}" = 1 ] || bridge_voice_detected
     BRIDGE_WAKE_DETECTED=0
     bridge_profile wake_setup_begin
@@ -36,14 +37,16 @@ bridge_voice_begin() {
     exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
     bridge_lock_for 1 6 || { bridge_voice_release; return 1; }
     export XIAOAI_VOICE_LED_LOCK=1
-    rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.feedback"
+    # Retain and remember the existing task, without a second ownership scheme.
+    if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" ]; then
+        read BRIDGE_PREEMPTED_FEEDBACK_OWNER BRIDGE_PREEMPTED_FEEDBACK_START < "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" || true
+    fi
     # This is the original, verified LX06 wake primitive, moved ahead of locks,
     # jq and DBus. Recording/attenuation still waits for the complete snapshot.
     [ ! -x /bin/show_led ] || /bin/show_led 1
     bridge_profile wake_led
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
     bridge_lock_for 3 7 || { bridge_voice_release; return 1; }
-    rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.led.json"
     BRIDGE_DUCK_TRANSFER=false
     BRIDGE_BT_SAVED=$(percent bluetooth)
     BRIDGE_MASTER_SAVED=$(percent mysoftvol)
@@ -138,6 +141,11 @@ bridge_voice_release() {
     if [ "$owner" = "$$" ]; then
         rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.voice" "$BRIDGE_RUNTIME/xiaoai_bridge.voice-cycle" "$BRIDGE_RUNTIME/xiaoai_bridge.voice-led-done"
         "$BRIDGE_BIN" --emit '{"type":"voice_end"}' >/dev/null 2>&1 || true
+        if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" ]; then
+            "$BRIDGE_DIR/lib/task-feedback.sh" after-voice \
+                "${BRIDGE_PREEMPTED_FEEDBACK_OWNER:-}" "${BRIDGE_PREEMPTED_FEEDBACK_START:-}" \
+                3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- </dev/null >/dev/null 2>&1 || true
+        fi
     fi
 }
 

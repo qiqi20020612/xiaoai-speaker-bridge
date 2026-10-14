@@ -50,7 +50,6 @@ EN = {
         "restart_listener": "Restart listening",
     },
     "select": {"idle_policy": "Idle volume policy", "agent": "Conversation agent"},
-    "light": {"led": "LED ring"},
 }
 ZH = {
     "number": {
@@ -95,7 +94,6 @@ ZH = {
         "restart_listener": "重启监听",
     },
     "select": {"idle_policy": "空闲音量策略", "agent": "对话代理"},
-    "light": {"led": "LED 灯环"},
 }
 SERVICE_NAMES = {
     "announce": ("Announce text", "主动播报"),

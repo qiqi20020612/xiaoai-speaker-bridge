@@ -173,11 +173,6 @@
       "agent": {
         "name": "对话代理"
       }
-    },
-    "light": {
-      "led": {
-        "name": "LED 灯环"
-      }
     }
   },
   "services": {

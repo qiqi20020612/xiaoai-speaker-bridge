@@ -18,6 +18,10 @@ flock -n 9 || exit 0
 # Runtime logs are bounded, and live only in /tmp.
 if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 65536 ]; then mv -f "$LOG" "$LOG.1";fi
 if [ -f "$BOOT_FLAG" ]; then
+    # A killed task may leave a native animation after the daemon stayed alive.
+    if [ -r /tmp/xiaoai_bridge.feedback ] && [ -x /data/xiaoai_bridge/lib/task-feedback.sh ]; then
+        /data/xiaoai_bridge/lib/task-feedback.sh recover 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- >/dev/null 2>&1 || true
+    fi
     # After boot, recover only the daemon. Respect an intentionally stopped
     # microphone and never repeat the Squeezelite/audio boot sequence.
     [ -x "$BRIDGE_START" ] || exit 0

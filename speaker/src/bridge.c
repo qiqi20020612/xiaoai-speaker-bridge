@@ -23,7 +23,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define VERSION "0.1.6"
+#define VERSION "0.1.7"
 #define CLIENTS 8
 #define BODY 12288
 #define OUTPUT 32768
@@ -695,8 +695,6 @@ static void dispatch(int i, char *method, char *path, char *body) {
         operation = "reset_context";
     else if (strcmp(path, "/api/conversation/agent") == 0)
         operation = "agent";
-    else if (strcmp(path, "/api/led") == 0)
-        operation = "led";
     else if (strcmp(path, "/api/ir") == 0)
         operation = "ir";
     if (!operation) {

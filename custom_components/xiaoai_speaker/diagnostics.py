@@ -15,7 +15,7 @@ async def async_get_config_entry_diagnostics(hass, entry):
         "capabilities": {
             **{
                 k: bool(caps.get(k))
-                for k in ("announce", "conversation", "voice_hooks", "listener", "led", "infrared")
+                for k in ("announce", "conversation", "voice_hooks", "listener", "infrared")
             },
             "volume": {
                 k: bool(caps.get("volume", {}).get(k))

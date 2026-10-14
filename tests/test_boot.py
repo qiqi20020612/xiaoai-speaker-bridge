@@ -1,6 +1,8 @@
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -100,3 +102,45 @@ def test_completed_boot_recovers_only_bridge_daemon_without_restarting_microphon
     subprocess.run([*speaker_shell, str(script_file)], check=True)
     assert calls.read_text().splitlines() == ["status 0", "start 1"]
     assert (tmp_path / "xiaoai_boot.done").exists()
+
+
+@pytest.mark.parametrize("healthy", [False, True])
+def test_existing_cron_recovers_orphaned_feedback_without_audio_boot_tasks(
+    tmp_path, install_flock, speaker_shell, healthy
+):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    install_flock(tools)
+    calls = tmp_path / "calls"
+    marker = tmp_path / "xiaoai_bridge.feedback"
+    marker.write_text("999999 0\n")
+    recovery = tmp_path / "task-feedback.sh"
+    stub(recovery, f"""printf 'feedback %s\\n' "$1" >> '{calls}'\nrm -f '{marker}' """)
+    stub(
+        tmp_path / "bridge-start",
+        f"""printf 'bridge %s %s\\n' "$1" "${{XIAOAI_SKIP_LISTENER_START:-0}}" >> '{calls}'
+[ "$1" != status ] || {"exit 0" if healthy else "exit 1"}""",
+    )
+    stub(tools / "pidof", f"printf 'unexpected-audio-boot\\n' >> '{calls}'; exit 99")
+    (tmp_path / "xiaoai_boot.done").touch()
+    (tmp_path / "uptime").write_text("200.1 100\n")
+    source = (
+        (ROOT / "speaker/xiaoai_boot.sh")
+        .read_text()
+        .replace("PATH=/usr/sbin:/usr/bin:/sbin:/bin", f"PATH={tools}:/usr/bin:/bin")
+        .replace("/tmp/xiaoai_boot", str(tmp_path / "xiaoai_boot"))
+        .replace("/proc/uptime", str(tmp_path / "uptime"))
+        .replace("/data/xiaoai_bridge/start.sh", str(tmp_path / "bridge-start"))
+        .replace("/tmp/xiaoai_bridge.feedback", str(marker))
+        .replace("/data/xiaoai_bridge/lib/task-feedback.sh", str(recovery))
+    )
+    script = tmp_path / "boot.sh"
+    script.write_text(source)
+    subprocess.run([*speaker_shell, str(script)], check=True)
+    expected = ["feedback recover", "bridge status 0"]
+    if not healthy:
+        expected.append("bridge start 1")
+    assert calls.read_text().splitlines() == expected
+    assert not marker.exists()
+    subprocess.run([*speaker_shell, str(script)], check=True)
+    assert calls.read_text().count("feedback recover") == 1

@@ -16,7 +16,7 @@
 | 远程文字 | 发文字、排队/超时/查询、循环防护 | 共同 STT 后入口、本地 intent、原 Agent、原 TTS | 已实现、语音↔文字上下文模拟测试 |
 | 会话 | Agent/隔离配置、动作 | 原缓存原子更新、session flock、成功滑动 TTL | 已实现；覆盖 Agent 最多 8 个上下文 |
 | 监听管理 | 开关、高级重启按钮 | 原 listener/procd 服务、原双通道 KWS | 已实现；活动语音拒绝管理操作 |
-| LED | 高级实体；命令回执状态 | 原 LED 程序审阅 guard；实际 sysfs 适配 | 已实现、去冲突变换测试；原 Shairport 配置不修改，写验收待测 |
+| 原生任务灯效 | announce / send_text 自动触发，无独立 light 平台 | 原 show_led / shut_led，既有 LED 锁/所有权和 AirPlay Guard | 默认工作、不可用时跳过；阶段/退出/抢占/升级测试，实际动画待 v0.1.7 复验 |
 | IR | 固定高级动作和校验 | 存在且验证过的 IR sysfs | 已实现适配；仅 38 kHz、有限脉冲，不承诺未验证硬件 |
 | 开机 | 无额外 HA 外进程 | 固定 boot/Cron/start、只停 Squeezelite | 已实现模拟异步停止测试，真实部署/重启未执行 |
 | 安装与回滚 | HACS 仅安装 HA 端 | 通用包 checksum、私有 adapter hash、原始备份 | 已实现模拟安装/幂等/回滚测试，真机执行待授权 |

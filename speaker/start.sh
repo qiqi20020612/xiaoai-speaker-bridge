@@ -124,6 +124,9 @@ while :;do
     sleep 1
 done
 start_diagnostic ready 0
+if [ -r "$RUNTIME/xiaoai_bridge.feedback" ]; then
+    "$DIR/lib/task-feedback.sh" recover 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- >/dev/null 2>&1 || true
+fi
 if [ "${XIAOAI_SKIP_LISTENER_START:-0}" != 1 ] && jq -e '.enable_listener_adapter==true' "$CONFIG" >/dev/null 2>&1; then
     "$DIR/lib/listener-service.sh" start || { start_failure listener_adapter_failed 1;exit 1; }
 fi

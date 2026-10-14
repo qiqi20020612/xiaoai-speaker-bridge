@@ -4,7 +4,7 @@
 
 Home Assistant 2026.10 自定义集成，以及 LX06 `/data` 下的轻量受控端。统一原生媒体播放器、独立音量、智能跟随、主动播报、远程文字对话、监听管理和设备状态。KWS、STT、现有 Conversation Agent、五分钟上下文及原有 TTS 回退链继续由音箱已有脚本执行。
 
-**用户已于 2026-10-12 在 LX06 完成 0.1.3 核心链路与空闲主进程资源验收。本轮修复仍需用户真机复验；开发未连接、部署或修改设备，自动测试使用合成数据。空闲 RSS/HWM 记录不代表负载和短寿命 worker 峰值。** 本轮范围、隐私、迁移和复验步骤见[验收修复说明](docs/acceptance-fixes.md)。
+**用户已确认 v0.1.6 在 LX06 上通过语音、TTS、上下文、音量恢复、AirPlay 并发、任务取消/去重、重启、31 分钟空闲及 8 次播报压力测试。v0.1.7 尚未发布，本轮不操作真实 LX06 或 HA，自动化不替代新增原生任务灯效的真机复验。** 升级、回滚和最小复验见 [v0.1.7 原生灯效说明](docs/lx06-v017.md)。
 
 ## 两端架构
 
@@ -42,10 +42,11 @@ HA 集成直接运行于 HA 内。音箱仅有一个新增 C 常驻进程，硬�
 | 任务 | HA 内有界优先队列、去重、查询、取消、阶段状态、断线后按 ID 查询；不会盲目重发已经可能执行的文字 |
 | 设备 | 在线、音源、语音活动、内存/运行时间等诊断；监听开关、会话重置、Agent 选择 |
 | AirPlay/蓝牙 | 真实服务检测和独立状态；反向控制需要逐项真机验证后开启本地 capability 标志 |
-| LED/IR | 保留高级适配和能力接口；未验证时明确拒绝操作，不出现假按钮 |
+| 原生任务灯效 | 默认调用 LX06 原生 show_led / shut_led；语音优先、共享 LED 锁和 AirPlay Guard；不提供灯光实体或颜色 API |
+| IR | 保留经过验证的有限脉冲能力接口，未验证时拒绝操作 |
 | 开机 | 固定 `/data/xiaoai_boot.sh`，90 秒后仅停 Squeezelite，等待异步退出，启动桥接并确认就绪；Cron 幂等、可重试 |
 
-AirPlay 音量具有只读传感器，原始 dB 保留在 API/诊断及已注册的兼容实体；没有通过发送端同步验证时，不会用主音量冒充反向控制。远程灯效仅在验证原语后开启，语音优先。诊断实体的新默认策略保留旧 Entity ID 与用户启用选择。
+AirPlay 音量具有只读传感器，原始 dB 保留在 API/诊断及已注册的兼容实体；没有通过发送端同步验证时，不会用主音量冒充反向控制。远程任务自动使用存在且可执行的原生灯效；程序不可用时安全跳过，语音优先。诊断实体的新默认策略保留旧 Entity ID 与用户启用选择。
 
 ## 安装
 
@@ -70,15 +71,15 @@ HACS 添加本仓库为 **Integration** 自定义仓库并安装，重启 HA，�
 
 HACS 安装布局与本地 `brand/` 资源遵循 [HACS Integration 要求](https://www.hacs.xyz/docs/publish/integration/) 和 [HA 集成文件结构](https://developers.home-assistant.io/docs/creating_integration_file_structure/)。HACS 只安装 HA 端。安装包固定下载入口是 [GitHub Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases)；尚未发版的构建可从 [CI](https://github.com/qiqi20020612/xiaoai-speaker-bridge/actions/workflows/ci.yml) 获取。仅声明已测 LX06/ARM EABI5 hard-float 兼容，音箱包须由用户审阅部署。
 
-下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS` 到同一目录，执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）。`v*` tag 经全部 CI 后才创建新 Release；手动发布也重新构建、严格校验，不能覆盖已有正式/预发布或草稿。维护者发版流程见[发布说明](docs/releases.md)。本次正式版本为 **0.1.6**；草稿附件上传后会下载复核，全部通过后才公开。
+下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS` 到同一目录，执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）。`v*` tag 经全部 CI 后才创建新 Release；手动发布也重新构建、严格校验，不能覆盖已有正式/预发布或草稿。维护者发版流程见[发布说明](docs/releases.md)。当前已发布版本为 **0.1.6**，本分支版本为 **0.1.7（待审核、未发布）**；草稿附件上传后会下载复核，全部通过后才公开。
 
-当前稳定 LX06 **直接从 0.1.3 升级到 0.1.6**，无需中间升级。jq 1.6 修复、录音关键路径、结束灯清理、format=4 私有适配迁移、失败恢复和真机测试清单见 [LX06 0.1.6 专项说明](docs/lx06-v016.md)。历史审计修复保留在 [0.1.5 记录](docs/lx06-v015.md)。本轮没有操作真实 LX06 或 HA。
+当前稳定 LX06 可从 **0.1.6 直接原地升级到 0.1.7**；保留 format=4 / hooks=4 / KWS guard=1 / AirPlay guard=3 的已审核私有副本，无需卸载、重新配对或修改旧 verified 字段。部署须在 PR 审阅和用户授权后进行，见 [v0.1.7 说明](docs/lx06-v017.md)。较早版本迁移记录见 [0.1.6](docs/lx06-v016.md) 和 [0.1.5](docs/lx06-v015.md)。
 
 音箱安装器默认 `--dry-run`。原配置不会被通用模板替换；共享语音入口需要从本机实际 launcher 生成私有副本，并另行启用一行引导。LED 协调通过审阅既有 LED 程序的守护补丁实现，**不修改 Shairport 配置或软件音量曲线**。详情和移除方法见安装文档。
 
 ## 调用示例
 
-设备页面提供两个原生文本操作控件：「播放文字」提交即调用 `announce`，「执行文字指令」提交即调用 `send_text`，提交成功后清空，可在任务结束后再次提交相同文字；回复播报和共享上下文开关默认开启。原文本实体 ID 保留，旧的两个发送按钮自动移除；任务状态、request_id 和错误码显示在文本实体属性中。**文本内容可能进入 HA 服务事件、自动化、日志及历史；清空不删除历史。** 输入前阅读[隐私与 Recorder 排除](docs/acceptance-fixes.md#文本输入隐私)。背景音乐避让默认关闭，须同时验证音箱实际 AirPlay/mysoftvol 路由并开启 HA 选项。远程灯效另需 `verified.task_led=true`，默认关闭，已有手动 LED 验证不会自动启用它。
+设备页面提供两个原生文本操作控件：「播放文字」提交即调用 `announce`，「执行文字指令」提交即调用 `send_text`，提交成功后清空，可在任务结束后再次提交相同文字；回复播报和共享上下文开关默认开启。原文本实体 ID 保留，旧的两个发送按钮自动移除；任务状态、request_id 和错误码显示在文本实体属性中。**文本内容可能进入 HA 服务事件、自动化、日志及历史；清空不删除历史。** 输入前阅读[隐私与 Recorder 排除](docs/acceptance-fixes.md#文本输入隐私)。背景音乐避让默认关闭，须同时验证音箱实际 AirPlay/mysoftvol 路由并开启 HA 选项。任务灯效默认使用原生动画，不需要灯效配置；独立手动 RGB 灯环实体与接口已移除。
 
 将实体 ID 换成实际设备的 ID。主动播报和对话是不同动作：
 

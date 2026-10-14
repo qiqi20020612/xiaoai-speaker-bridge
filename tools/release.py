@@ -60,7 +60,7 @@ def package(binary, output, root=ROOT):
     component = root / "custom_components/xiaoai_speaker"
     ha = output / f"xiaoai-speaker-ha-{release_version}.zip"
     modules = (
-        "__init__ binary_sensor button client config_flow const coordinator diagnostics entity jobs light media_player mpd number quick select sensor services switch text views volume"
+        "__init__ binary_sensor button client config_flow const coordinator diagnostics entity jobs media_player mpd number quick select sensor services switch text views volume"
     ).split()
     files = [
         *(component / f"{module}.py" for module in modules),

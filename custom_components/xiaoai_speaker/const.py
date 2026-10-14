@@ -12,7 +12,6 @@ PLATFORMS = [
     Platform.SWITCH,
     Platform.BUTTON,
     Platform.SELECT,
-    Platform.LIGHT,
     Platform.TEXT,
 ]
 DEFAULT_PORT = 8766

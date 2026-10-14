@@ -173,11 +173,6 @@
       "agent": {
         "name": "Conversation agent"
       }
-    },
-    "light": {
-      "led": {
-        "name": "LED ring"
-      }
     }
   },
   "services": {

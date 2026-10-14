@@ -9,7 +9,7 @@
 | BUG-07 | 三个 HA SelectSelector 严格校验来源各一次；保留旧 source_priority；真实 probatio 转换、重复/缺失/未知值、保存再打开测试 | 打开配置、保存、重载、再次打开 |
 | BUG-01 | 原 show_led 1 提前；一次 jq 合并快照/voice_begin；状态采集仍在衰减前；DBus 自带 600 ms 超时，MPD CLI 有界；音量/音频锁不绕过 | WAKE/activated→LED、LED→录音；不同来源与 G4～G6/H1～H3 |
 | PERF-02 | 请求字段和配置字段各一次 jq；无临时 TTS 音量时不读取保存值；消除重复音量读取；阶段 trace | 相同输入、网络和播放长度的新旧对比 |
-| BUG-03 | 远程阶段灯效、共享 LED 锁、退出清理及原灯效恢复；未验证原语不写 sysfs | 灯色、AirPlay/原 listener 协作、取消/失败/抢占 |
+| BUG-03 | v0.1.7 统一原生 1/2/11/shut 灯效、共享 LED 锁和所有权、退出清理及 AirPlay 恢复；无 RGB 渲染 | 原生动画、AirPlay/Listener 协作、取消/失败/抢占 |
 | IMPROVE-06 | 默认关闭、双端验证开关；AirPlay 确认活动时 mysoftvol 上限；新目标版本恢复和双顺序语音交接测试 | 确认实际音频路由、sender 百分比、G7/G8 |
 | IMPROVE-09 | 原生 text/button/switch 调用现有服务/JobManager；非空/255 字符/忙碌/离线/能力检查；快速重复发送防护 | 设备页日常使用、实际 Recorder/事件保留策略 |
 | IMPROVE-10 | tag/手动发布均重新构建并依赖全部 CI；版本/ABI/内外 SHA256；仅新 Release、最小权限 | GitHub workflow 实际运行、下载包人工安装 |
@@ -19,9 +19,9 @@
 
 ## 远程灯效
 
-HA 队列中的 queued/accepted 仅显示任务状态，不抢占当前声音的灯。设备工作时 processing 为橙色；调用原 TTS 时 synthesizing 为紫色；只有检测到该 TTS 进程或后代中的 miplay、mpg123、ogg123、aplay才显示青色 playing。无回复播报的文字任务只有处理灯。完成、失败、取消走同一清理，恢复此前命令灯或重放经过适配的原 AirPlay 音量灯。语音持有同一 LED 锁并优先让远程任务退让。
+v0.1.7 移除独立灯光实体及颜色 API。HA 排队中的任务不抢灯；设备开始处理后自动沿用真实 Launcher 的 `show_led 1` → `show_led 2`，处理、合成与播放期间保持 2，结束执行 `show_led 11` 和 `shut_led 1/2/3`。原脚本注释的 show_led 3 不启用，不模拟录音或 STT。
 
-默认 `verified.task_led=false`，独立于原有手动灯光 `verified.led`。只有用户确认该型号的真实 sysfs 原语、审核并启用新版 airplay-led 私有副本后，才同时设置 `verified.led=true`、`verified.task_led=true`。已有手动灯光配置升级后不会自动启用远程灯效。测试使用临时文件，不等价于 LX06 灯效验收。
+原生命令存在且可执行时默认工作，旧配置中的 led/task_led 验证字段不影响行为。无回复、失败、取消、超时同样收尾；语音持有原 LED 锁，旧任务按 PID/starttime 校验所有权。任务结束重放已审核 AirPlay Guard 的原音量灯，语音抢占时延后到语音结束。异常死亡的标记由启动、既有 Cron 或下次任务按同一锁恢复，无新常驻进程。原生程序不可用时安全跳过，硬件动画仍需复验。
 
 ## 音乐避让
 
@@ -83,10 +83,6 @@ task_begin→task_parsed 测本地解析；session_wait→session_ready 测锁�
 
 ## 手动升级与复验
 
-通过 [Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases) 下载 0.1.5 包并校验 SHA256。用本版工具从保存的未修改原脚本重新生成私有 listener/airplay-led 副本并检查 diff/hash；放入解压包的 adapter 后执行 `install.sh --dry-run`、`--apply`。安装器只沿用 review format=3、hooks revision=3、原始/输出哈希和 hook 顺序均匹配且仅保留经过审阅的 show_led 2/11 调用的副本；否则在替换文件/重启服务前明确要求重新生成，相同包重装也校验。原配置和 UUID/token 被保留。升级后的 HA 配置可直接使用旧选项，不需重新配对。
+v0.1.7 尚未合并/发版，审阅后使用同一提交 CI 产物及其 SHA256SUMS，由用户授权部署。从已验证的 v0.1.6 原地升级，沿用通过哈希校验的 format=4/hook=4、KWS=1、AirPlay guard=3 私有副本；不改设备 UUID/token、OAuth、Agent、KWS/STT/TTS、AirPlay 曲线或旧验证字段，不卸载、不删除恢复备份。详细步骤及最小实测见 [v0.1.7 原生灯效说明](lx06-v017.md)。
 
-已启用的旧 AirPlay LED 保护若与新版副本不匹配，先用旧安装目录的 `tools/activate_airplay_led.sh --remove` 恢复原程序，升级后再审核启用新版保护。升级时保持 `verified.task_led=false`；只有新版保护已启用并完成验证后才开启。
-
-回滚使用同一完整包的 `install.sh --rollback`；HA 回退版本后重启。新增实体可能不可用，保留它们的 registry 供以后恢复，不改旧 ID。0.1.5 的三个版本字段同步更新，正式 tag 必须指向通过完整 CI 的合并提交。本轮发布不执行真机部署。
-
-按用户原验收脚本复跑 E1～E5、G4～G8、H1～H5；再检查重启、空闲 ≥31 分钟与实际负载峰值/短寿命 worker/原 listener/整机资源。MPD 队列/控制及其他机型另行实测。
+不兼容的活跃 AirPlay Guard 仍按安装器原规则拒绝；已匹配的 v0.1.6 Guard 不必移除再启用。失败恢复沿用同一完整包的 --rollback，恢复升级前 v0.1.6；HA 回退保留其他实体 ID，已移除的旧手动灯光若要恢复自定义 ID，使用升级前 HA 备份。旧灯光自动化不会自动修改或删除。

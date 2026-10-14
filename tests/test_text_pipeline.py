@@ -818,59 +818,6 @@ bridge_restore_volume
     assert not (path / "xiaoai_bridge.duck.json").exists()
 
 
-def test_feedback_yields_to_voice_and_restores_prior_manual_led(text_device, speaker_shell):
-    _, path, env = text_device
-    led = path / "led_rgb"
-    led.write_text("")
-    feedback = path / "bridge/lib/task-feedback.sh"
-    feedback.write_text(feedback.read_text().replace("/sys/devices/i2c-0/0-003a/led_rgb", str(led)))
-    (path / "xiaoai_bridge.led.json").write_text('{"on":true,"rgb":[1,2,3],"brightness":255}')
-    body = f'''. "{path / "bridge/lib/common.sh"}"
-. "{feedback}"
-MODE=send_text
-TASK_LED_VERIFIED=true
-bridge_feedback_setup
-bridge_feedback_stage processing
-bridge_led_busy || exit 78
-cp "{led}" "$STATE_DIR/processing-color"
-bridge_feedback_end
-cp "{led}" "$STATE_DIR/restored-color"
-bridge_feedback_stage synthesizing
-printf '%s\\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
-printf sentinel > "{led}"
-bridge_feedback_stage playing
-bridge_feedback_end
-'''
-    result = subprocess.run(
-        [*speaker_shell, "-c", body], env=env, capture_output=True, text=True, timeout=5
-    )
-    assert result.returncode == 0, result.stderr
-    assert (path / "processing-color").read_text().strip() == "17 20624"
-    assert (path / "restored-color").read_text().strip() == "17 197121"
-    assert led.read_text() == "sentinel"
-    assert not (path / "xiaoai_bridge.feedback").exists()
-
-
-@pytest.mark.parametrize("task_led", [None, False, True])
-def test_silent_remote_text_has_opt_in_processing_but_no_speech_phases(text_device, task_led):
-    call, path, env = text_device
-    led = path / "led_rgb"
-    led.write_text("")
-    feedback = path / "bridge/lib/task-feedback.sh"
-    feedback.write_text(feedback.read_text().replace("/sys/devices/i2c-0/0-003a/led_rgb", str(led)))
-    config = path / "config.json"
-    values = json.loads(config.read_text())
-    values["verified"] = {"led": True}
-    if task_led is not None:
-        values["verified"]["task_led"] = task_led
-    config.write_text(json.dumps(values))
-    result, _ = call("send_text", "test", speak_response=False)
-    assert result.returncode == 0
-    assert "synthesizing" not in result.stdout and "playing" not in result.stdout
-    assert led.read_text().strip() == ("17 0" if task_led else "")
-    assert not (path / "xiaoai_bridge.feedback").exists()
-
-
 def test_multiline_request_remains_literal_and_profile_has_no_text(text_device, speaker_shell):
     call, path, env = text_device
     text = "line one\nline two with $(no_command) and `no_command`"

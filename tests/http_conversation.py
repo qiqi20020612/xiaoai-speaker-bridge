@@ -111,6 +111,8 @@ class ConversationHTTP:
                     if text == "what is my name"
                     else "reply: " + text
                 )
+                if text == "EMPTY_REPLY":
+                    reply = ""
                 response = {
                     "conversation_id": cid,
                     "response": {
