@@ -91,7 +91,7 @@ class XiaoAIMediaPlayer(XiaoAIEntity, MediaPlayerEntity):
     @property
     def volume_level(self):
         target = {"airplay": "airplay", "bluetooth": "bluetooth", "mpd": "master"}.get(
-            self.source, "tts" if self.coordinator.volume.idle_policy == "tts" else "master"
+            self.source, "master"
         )
         data = self.coordinator.data
         value = data.get("volumes", {}).get(target)

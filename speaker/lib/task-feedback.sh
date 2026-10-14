@@ -42,15 +42,12 @@ bridge_feedback_finish_native() {
     return "$feedback_native_result"
 }
 
-bridge_feedback_stage() {
-    case "$1" in processing|synthesizing|playing) ;; *) return 0 ;; esac
+bridge_feedback_begin() {
+    [ "$BRIDGE_FEEDBACK_OWNED" = false ] || return 0
     [ "$BRIDGE_FEEDBACK_AVAILABLE" = true ] && ! voice_busy || return 0
     exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
     bridge_lock_for 0 6 || return 0
     if voice_busy; then flock -u 6;return 0;fi
-    # Later phases keep the original loading animation; do not restart it or
-    # let an older task reclaim ownership removed/replaced by another owner.
-    if [ "$BRIDGE_FEEDBACK_OWNED" = true ]; then flock -u 6;return 0;fi
     if feedback_busy; then flock -u 6;return 0;fi
     if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" ]; then
         bridge_feedback_finish_native || { flock -u 6;return 0; }

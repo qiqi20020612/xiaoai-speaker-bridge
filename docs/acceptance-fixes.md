@@ -15,7 +15,7 @@
 | IMPROVE-10 | tag/手动发布均重新构建并依赖全部 CI；版本/ABI/内外 SHA256；仅新 Release、最小权限 | GitHub workflow 实际运行、下载包人工安装 |
 | BUG-04 | 首次有能力才添加，失去能力时 unavailable；生命周期不删旧实体、不重复注册 | adapter ready/离线/恢复 |
 | OBS-05 | 首选来源、并发、上级未知、过期分别处理；本地观测冻结直到语音结束；优先级随 HA policy 传入 | AirPlay 暂停事件与轮询延迟 |
-| IMPROVE-08 | 新装略去 peak_rss/memory_total/raw_volume；旧 registry 继续兼容；诊断默认禁用 | 旧自动化、手动启用的实体与历史增长 |
+| IMPROVE-08 | 0.1.7 精确移除 peak_rss/memory_total/raw_volume 旧实体；raw dB 合并为百分比传感器属性 | 旧自动化、手动启用的实体与历史增长 |
 
 ## 远程灯效
 
@@ -31,7 +31,7 @@ HA 配置中的“播报时压低背景音乐”默认关闭；开启后上限�
 
 ## 文本输入隐私
 
-原生 text 操作仅用于非敏感内容，最多 255 个字符，这是 HA State Machine 的限制；较长文本仍使用原服务（4096 字节）。「播放文字」提交即调用 `xiaoai_speaker.announce`，「执行文字指令」提交即调用 `xiaoai_speaker.send_text`，不需要独立发送按钮。提交成功后清空，任务结束后可以再次提交相同文字；空白、NUL 和超长输入拒绝。回复播报与共享上下文开关初始均为 true，开关/输入存于内存，集成重载后恢复默认。交互参考 [Xiaomi Miot 的 TextEntity 动作设计](https://github.com/al-one/hass-xiaomi-miot/blob/master/custom_components/xiaomi_miot/text.py)，执行仍通过本集成原有服务与队列。
+原生 text 操作仅用于非敏感内容，最多 255 个字符，这是 HA State Machine 的限制；较长文本仍使用原服务（4096 字节）。「播放文字」提交即调用 `xiaoai_speaker.announce`，「执行文字指令」提交即调用 `xiaoai_speaker.send_text`，不需要独立发送按钮。提交成功后清空，任务结束后可以再次提交相同文字；空白、NUL 和超长输入拒绝。快捷文字对话使用原服务 speak_response=true、use_context=true 默认值；两个独立开关和其内存状态已删除。交互参考 [Xiaomi Miot 的 TextEntity 动作设计](https://github.com/al-one/hass-xiaomi-miot/blob/master/custom_components/xiaomi_miot/text.py)，执行仍通过本集成原有服务与队列。
 
 提交值经过 HA 服务，可能进入服务事件、自动化和日志；旧版已保存的文本状态及历史也不会被删除。输入使用 Password 模式也不能把这些渠道变成安全存储。提交后清空只是方便下一次输入，不删除历史。集成诊断不导出输入、回复或 token。
 
@@ -65,7 +65,7 @@ data:
 
 离线、能力缺失或状态过期时文本实体显示 unavailable，不派发任务。HA 原生 `text.set_value` 会跳过不可用目标并记录警告；原 `xiaoai_speaker.announce` / `send_text` 服务仍按原逻辑抛出错误。繁忙和无效输入在可用文本控件中正常报错，未改 HA 的原生服务分发机制。
 
-如果 registry 已有 bridge_peak_rss、memory_total、airplay_raw_volume，仍注册同一 unique_id/Entity ID 并保留 enabled/disabled 选择。其他诊断实体更改默认策略也不覆盖已有 registry 设置。用户确认没有自动化依赖后可自行移除兼容实体；集成不自动删除或改名。
+0.1.7 会精确清理已删除实体（包括 bridge_peak_rss、memory_total、airplay_raw_volume），禁用或改名也处理；保留实体的 Unique ID、Entity ID 和启用选择不变。引用被删实体的自动化应先调整。完整迁移清单见 [0.1.7 精简说明](lx06-v017.md)。
 
 ## 阶段测量
 

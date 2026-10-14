@@ -17,7 +17,7 @@ PARSED=$(printf '%s' "$REQUEST" | jq -r '
   (if has("use_context") then (.use_context|type)=="boolean" else true end) and
   (if has("volume") then (.volume|type)=="number" and .volume>=0 and .volume<=100 else true end) and
   (if has("duck_volume") then (.duck_volume|type)=="number" and .duck_volume>=0 and .duck_volume<=100 else true end) and
-  (if has("agent_id") then .agent_id==null or ((.agent_id|type)=="string" and (.agent_id|test("\\Aconversation[.][a-zA-Z0-9_]+\\z"))) else true end) and
+  (has("agent_id")|not) and
   (if has("_snapshot") then (._snapshot|type)=="object" and
     (._snapshot|if has("source") then .source==null or (.source|type)=="string" else true end) and
     (._snapshot|if has("uncertain") then (.uncertain|type)=="boolean" else true end)
@@ -25,14 +25,13 @@ PARSED=$(printf '%s' "$REQUEST" | jq -r '
   (.text|explode|index(0)|not)) then
   (if has("speak_response") then .speak_response else true end),
   (if has("use_context") then .use_context else true end),
-  (.volume // ""), (.duck_volume // ""), (.agent_id // ""), ((._snapshot // {})|tojson), .text
+  (.volume // ""), (.duck_volume // ""), ((._snapshot // {})|tojson), .text
   else error("invalid_request") end' 2>/dev/null) || fail invalid_request
 {
     IFS= read -r SPEAK_RESPONSE
     IFS= read -r USE_CONTEXT
     IFS= read -r OVERRIDE
     IFS= read -r DUCK_VOLUME
-    IFS= read -r AGENT
     IFS= read -r SNAPSHOT
     TEXT=$(cat)
 } <<EOF
@@ -43,8 +42,6 @@ bridge_profile task_parsed
 [ -n "$TEXT" ] && [ "${#TEXT}" -le 4096 ] || fail invalid_text
 WORK=$(mktemp -d "$BRIDGE_RUNTIME/xiaoai_text.XXXXXX") || fail local_resource_failed
 TTS_OVERRIDE_ACTIVE=false
-TTS_RESTORE_VALUE=''
-TTS_RESTORE_REVISION=0
 VOICE_GUARD_ACTIVE=false
 restore_tts_volume() {
     [ "$TTS_OVERRIDE_ACTIVE" = true ] || return 0
@@ -110,7 +107,7 @@ if [ "$MODE" != announce ]; then
     bridge_load_conversation_adapter "$ORIGINAL_CURL" || fail conversation_adapter_missing
 fi
 bridge_feedback_setup
-bridge_feedback_stage processing
+bridge_feedback_begin
 [ -x "$TTS_PATH" ] || fail tts_unavailable
 bridge_profile config_ready
 
@@ -128,15 +125,11 @@ speak() {
     fi
     if [ "$MODE" != voice ]; then bridge_recover_pending || fail volume_recovery_pending;fi
     override=$OVERRIDE
-    rev_before=0
     if [ -n "$override" ]; then
         exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
         bridge_lock_for 3 7 || fail busy
         saved_tts=$(percent notifyvol)
-        [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] && rev_before=$(bridge_json revision "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
         [ -n "$saved_tts" ] || fail volume_unknown
-        TTS_RESTORE_VALUE=$saved_tts
-        TTS_RESTORE_REVISION=$rev_before
         bridge_volume_journal "$BRIDGE_RUNTIME/xiaoai_bridge.tts-volume.json" "{\"tts\":$saved_tts}" || { flock -u 7;fail state_write_failed; }
         TTS_OVERRIDE_ACTIVE=true
         amixer sset notifyvol "${override}%" >/dev/null 2>&1 || fail hardware_control_failed
@@ -144,7 +137,6 @@ speak() {
     fi
     bridge_duck_begin
     printf '{"stage":"synthesizing"}\n'
-    bridge_feedback_stage synthesizing
     bridge_profile tts_launch
     "$TTS_PATH" "$utterance" > /dev/null 2>&1 &
     tts_pid=$!
@@ -166,7 +158,7 @@ speak() {
             [ "$playing" = true ] && break
             pending=$next
         done
-        if [ "$playing" = true ]; then printf '{"stage":"playing"}\n';bridge_feedback_stage playing;bridge_profile tts_playing;break;fi
+        if [ "$playing" = true ]; then printf '{"stage":"playing"}\n';bridge_profile tts_playing;break;fi
         sleep 0.25
     done
     result=0;wait "$tts_pid" || result=$?
@@ -187,26 +179,10 @@ if [ "$MODE" = announce ]; then
     exit 0
 fi
 
-DEFAULT_AGENT=${EOAIC2_AGENT_ID:-}
-[ -n "$DEFAULT_AGENT" ] || fail conversation_adapter_missing
-if [ -z "$AGENT" ] && [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json" ]; then
-    AGENT=$(jq -r '.agent_id // empty' "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json")
-fi
-if [ -n "$AGENT" ]; then
-    bridge_valid_agent "$AGENT" || fail invalid_agent
-    EOAIC2_AGENT_ID=$AGENT
-fi
+[ -n "${EOAIC2_AGENT_ID:-}" ] || fail conversation_adapter_missing
+# Retired Bridge overrides are never loaded; the original EOAIC2 config wins.
 if [ "$USE_CONTEXT" = false ]; then
     EOAIC2_STATE="$WORK/context.json"
-elif [ "$EOAIC2_AGENT_ID" != "$DEFAULT_AGENT" ]; then
-    EOAIC2_STATE="$BRIDGE_RUNTIME/xiaoai_bridge.context.$EOAIC2_AGENT_ID.json"
-    if [ ! -f "$EOAIC2_STATE" ]; then
-        contexts=0
-        for item in "$BRIDGE_RUNTIME"/xiaoai_bridge.context.*.json; do
-            [ -f "$item" ] && contexts=$((contexts+1))
-        done
-        [ "$contexts" -lt 8 ] || fail context_limit
-    fi
 fi
 [ -n "${EOAIC2_STATE:-}" ] || fail conversation_adapter_missing
 

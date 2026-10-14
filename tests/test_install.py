@@ -642,7 +642,17 @@ def test_v016_upgrade_and_recovery_keep_private_state_and_airplay_guard(installa
     listener = data / "listener"
     listener.write_text(
         f'HA_TOKEN="synthetic-current"\nHA_REFRESH_TOKEN="synthetic-rotated"\n'
+        'EOAIC2_AGENT_ID="conversation.native_configured"\n'
         f". {old}/lib/bootstrap.sh\n. /data/kws_bootstrap.sh\n"
+    )
+    agent_config = data / "eoai_agent.sh"
+    agent_config.write_text("# Existing native EOAIC2 wrapper and TTL\nEOAIC2_KEEP_SECONDS=300\n")
+    runtime = data.parent / "runtime"
+    override_record = runtime / "xiaoai_bridge.agent.json"
+    override_record.write_text('{"agent_id":"conversation.old_override"}')
+    native_context = runtime / "eoai_conversation.json"
+    native_context.write_text(
+        '{"agent":"conversation.native_configured","id":"native-cache","ts":1}'
     )
     kws = data / "kws_bootstrap.sh"
     kws.write_text("#!/bin/sh\n# Existing KWS configuration\n")
@@ -661,6 +671,9 @@ def test_v016_upgrade_and_recovery_keep_private_state_and_airplay_guard(installa
             data / "airplay_volume_led",
             airplay_backup,
             airplay_config,
+            agent_config,
+            override_record,
+            native_context,
         )
     }
     previous_backup = data / "xiaoai_bridge.backup"

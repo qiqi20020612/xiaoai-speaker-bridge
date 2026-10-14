@@ -16,7 +16,7 @@ INFO = {
     "device_id": "synthetic-speaker",
     "model": "LX06",
     "protocol": 1,
-    "version": "0.1.0",
+    "version": "0.1.7",
     "capabilities": {
         "volume": {"master": True, "tts": True, "bluetooth": True, "airplay": False},
         "playback": {"airplay": {"actions": []}, "bluetooth": {"actions": []}},
@@ -31,7 +31,7 @@ STATE = {
     "bluetooth": {"state": "stopped", "active": False},
     "voice": {"active": False},
     "listener": {"running": True},
-    "system": {"uptime": 100, "memory_available": 50000},
+    "system": {"memory_available": 50000, "bridge_rss": 3000, "cpu_load": 0.15},
 }
 DATA = {
     CONF_HOST: "speaker.example",
@@ -135,7 +135,7 @@ async def test_services_require_a_target_and_keep_announcement_separate(hass, mo
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_options_have_persistent_idle_policy(hass, mock_clients):
+async def test_options_have_only_retained_configuration(hass, mock_clients):
     entry = MockConfigEntry(
         domain=DOMAIN, title="Synthetic speaker", data=DATA, unique_id="synthetic-speaker"
     )
@@ -148,7 +148,6 @@ async def test_options_have_persistent_idle_policy(hass, mock_clients):
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
-            "idle_policy": "tts",
             "poll_interval": 15,
             "source_priority_1": "airplay",
             "source_priority_2": "bluetooth",
@@ -156,7 +155,7 @@ async def test_options_have_persistent_idle_policy(hass, mock_clients):
         },
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert entry.options["idle_policy"] == "tts"
+    assert "idle_policy" not in entry.options
     assert entry.options["source_priority"] == ["airplay", "bluetooth", "mpd"]
 
 
@@ -175,7 +174,6 @@ async def test_options_serialization_order_validation_and_reopen(hass):
         field["default"] for field in fields if field["name"].startswith("source_priority_")
     ] == ["mpd", "airplay", "bluetooth"]
     values = {
-        "idle_policy": "master",
         "poll_interval": 10,
         "source_priority_1": "mpd",
         "source_priority_2": "mpd",
@@ -191,7 +189,7 @@ async def test_options_serialization_order_validation_and_reopen(hass):
     saved = await hass.config_entries.options.async_configure(result["flow_id"], values)
     assert saved["type"] == FlowResultType.CREATE_ENTRY
     assert entry.options["source_priority"] == ["mpd", "bluetooth", "airplay"]
-    assert entry.options["agent_id"] == "device_default"
+    assert "agent_id" not in entry.options
     assert "source_priority_1" not in entry.options
     reopened = await hass.config_entries.options.async_init(entry.entry_id)
     fields = probatio.to_field_list(reopened["data_schema"], custom_serializer=cv.custom_serializer)

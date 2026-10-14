@@ -13,7 +13,6 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/file.h>
-#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -77,10 +76,10 @@ static char voice_sources[128] = "[]";
 static char policy_priority[128] = "[\"airplay\",\"bluetooth\",\"mpd\"]";
 static char voice_volumes[256] = "{}";
 static int voice_uncertain = 1, policy_uncertain = 1;
-static double next_probe = 0, policy_at = 0, last_airplay_check = 0;
+static double next_probe = 0, last_airplay_check = 0;
 static time_t airplay_mtime = 0;
 static time_t cached_at = 0;
-static long worker_peak_rss_kb = 0;
+static pid_t restart_pid = 0;
 static int probe_ok = 0;
 static unsigned probe_attempt = 0;
 static int probe_running = 0, startup_exhausted = 0, server_logging = 0;
@@ -496,11 +495,95 @@ static void state_json(char *out, size_t cap) {
              voice_volumes, voice_uncertain ? "true" : "false", voice_observations);
     snprintf(out, cap,
              "{%.*s%s%s,\"audio_active\":%s,\"capabilities\":%s,\"updated\":%ld,"
-             "\"state_stale\":%s,\"worker_peak_rss_kb\":%ld,\"instance_id\":\"%s\",\"device_id\":"
+             "\"state_stale\":%s,\"instance_id\":\"%s\",\"device_id\":"
              "\"%s\"}",
              n > 2 ? (int)n - 2 : 0, n > 2 ? cached_state + 1 : "", n > 2 ? "," : "", voice,
              audio ? "true" : "false", capabilities, (long)cached_at, probe_ok ? "false" : "true",
-             worker_peak_rss_kb, instance_id, cfg.id);
+             instance_id, cfg.id);
+}
+static void restart_bridge(int i) {
+    if (restart_pid) {
+        response(i, 202, "{\"accepted\":true}");
+        return;
+    }
+    if (voice_active) {
+        error(i, 409, "busy");
+        return;
+    }
+    for (int k = 0; k < WORKERS; k++)
+        if (workers[k].pid && workers[k].kind != 0) {
+            error(i, 409, "busy");
+            return;
+        }
+    // Voice can own these locks before its local wake event reaches HTTP.
+    for (int k = 0; k < 2; k++) {
+        char gate[512];
+        runtime_path(gate, sizeof gate,
+                     k ? "xiaoai_bridge.session.lock" : "xiaoai_bridge.audio.lock");
+        int fd = open(gate, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+        if (fd < 0 || flock(fd, LOCK_EX | LOCK_NB) < 0) {
+            if (fd >= 0)
+                close(fd);
+            error(i, 409, "busy");
+            return;
+        }
+        close(fd);
+    }
+    const char *dir = getenv("XIAOAI_BRIDGE_DIR");
+    if (!dir)
+        dir = "/data/xiaoai_bridge";
+    char script[1024], path[512];
+    if (snprintf(script, sizeof script, "%s/start.sh", dir) >= (int)sizeof script ||
+        access(script, X_OK) < 0) {
+        error(i, 503, "restart_unavailable");
+        return;
+    }
+    runtime_path(path, sizeof path, "xiaoai_bridge.restart.lock");
+    int guard = open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (guard < 0) {
+        error(i, 503, "restart_unavailable");
+        return;
+    }
+    if (flock(guard, LOCK_EX | LOCK_NB) < 0) {
+        int busy = errno == EWOULDBLOCK;
+        close(guard);
+        if (busy)
+            response(i, 202, "{\"accepted\":true}");
+        else
+            error(i, 503, "restart_unavailable");
+        return;
+    }
+    restart_pid = fork();
+    if (restart_pid == 0) {
+        // A short-lived start.sh caller, outside the daemon's worker groups.
+        // stdin retains only the restart guard; the new daemon uses /dev/null.
+        if (setsid() < 0 || dup2(guard, STDIN_FILENO) < 0)
+            _exit(127);
+        close(guard);
+        int null = open("/dev/null", O_WRONLY);
+        if (null < 0 || dup2(null, STDOUT_FILENO) < 0 || dup2(null, STDERR_FILENO) < 0)
+            _exit(127);
+        if (null > STDERR_FILENO)
+            close(null);
+        setenv("XIAOAI_BRIDGE_DIR", dir, 1);
+        setenv("XIAOAI_BRIDGE_RUNTIME", cfg.runtime, 1);
+        setenv("XIAOAI_BRIDGE_CONFIG", cfg.path, 1);
+        setenv("XIAOAI_SKIP_LISTENER_START", "1", 1);
+        setenv("XIAOAI_BRIDGE_RESTART_API", "1", 1);
+        // Let the already-buffered acknowledgement reach HA before HTTP exits.
+        struct timespec delay = {1, 0};
+        while (nanosleep(&delay, &delay) < 0 && errno == EINTR) {
+        }
+        execl(script, script, "restart", (char *)NULL);
+        _exit(127);
+    }
+    close(guard);
+    if (restart_pid < 0) {
+        restart_pid = 0;
+        error(i, 503, "restart_unavailable");
+        return;
+    }
+    response(i, 202, "{\"accepted\":true}");
 }
 static void dispatch(int i, char *method, char *path, char *body) {
     char out[OUTPUT];
@@ -594,6 +677,14 @@ static void dispatch(int i, char *method, char *path, char *body) {
         error(i, 400, "invalid_json");
         return;
     }
+    if (strcmp(path, "/api/bridge/restart") == 0) {
+        restart_bridge(i);
+        return;
+    }
+    if (restart_pid) {
+        error(i, 503, "restart_in_progress");
+        return;
+    }
     if (strcmp(path, "/api/policy") == 0) {
         int source = json_get(&d, 0, "source");
         char value[32] = "";
@@ -635,7 +726,6 @@ static void dispatch(int i, char *method, char *path, char *body) {
         }
         strcpy(policy_source, value);
         policy_uncertain = json_bool(&d, json_get(&d, 0, "uncertain"), 1);
-        policy_at = monotime();
         save_snapshot();
         response(i, 200, "{\"accepted\":true}");
         return;
@@ -693,8 +783,6 @@ static void dispatch(int i, char *method, char *path, char *body) {
         operation = "listener";
     else if (strcmp(path, "/api/conversation/reset") == 0)
         operation = "reset_context";
-    else if (strcmp(path, "/api/conversation/agent") == 0)
-        operation = "agent";
     else if (strcmp(path, "/api/ir") == 0)
         operation = "ir";
     if (!operation) {
@@ -712,6 +800,10 @@ static void dispatch(int i, char *method, char *path, char *body) {
         return;
     }
     if (kind) {
+        if (json_get(&d, 0, "agent_id") >= 0) {
+            error(i, 400, "unsupported_agent_override");
+            return;
+        }
         char value[4097];
         int n = text(&d, 0, "text", value, sizeof value);
         if (n < 1 || n > 4096) {
@@ -1212,6 +1304,8 @@ static int server(void) {
                     close_conn(index);
             }
         double now = monotime();
+        if (restart_pid && waitpid(restart_pid, NULL, WNOHANG) == restart_pid)
+            restart_pid = 0;
         for (int k = 0; k < WORKERS; k++)
             if (workers[k].pid) {
                 if (now > workers[k].deadline && !workers[k].kill_at) {
@@ -1226,15 +1320,8 @@ static int server(void) {
                 if (workers[k].kill_at && now > workers[k].kill_at)
                     kill(-workers[k].pid, SIGKILL);
                 int status;
-                struct rusage usage = {0};
-                pid_t done = wait4(workers[k].pid, &status, WNOHANG, &usage);
+                pid_t done = waitpid(workers[k].pid, &status, WNOHANG);
                 if (done == workers[k].pid) {
-                    long peak = usage.ru_maxrss;
-#ifdef __APPLE__
-                    peak /= 1024;
-#endif
-                    if (peak > worker_peak_rss_kb)
-                        worker_peak_rss_kb = peak;
                     while (1) {
                         size_t before = workers[k].used;
                         read_worker(k);

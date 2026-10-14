@@ -5,9 +5,8 @@ triggers:
     to: "on"
     for: "00:05:00"
 conditions:
-  - condition: state
-    entity_id: binary_sensor.your_speaker_online
-    state: "on"
+  - condition: template
+    value_template: "{{ states('media_player.your_speaker') not in ['unavailable', 'unknown'] }}"
 actions:
   - action: xiaoai_speaker.announce
     data:

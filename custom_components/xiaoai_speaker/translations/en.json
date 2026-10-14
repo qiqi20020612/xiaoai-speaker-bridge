@@ -47,7 +47,6 @@
       "init": {
         "title": "Volume and state options",
         "data": {
-          "idle_policy": "Idle volume target",
           "poll_interval": "Health poll interval (seconds)",
           "announce_ducking": "Duck verified AirPlay background music during speech",
           "announce_duck_volume": "Background music duck volume ceiling (%)",
@@ -71,75 +70,25 @@
       },
       "volume_bluetooth": {
         "name": "Bluetooth volume"
-      },
-      "volume_headphone": {
-        "name": "Headphone volume"
-      },
-      "volume_airplay": {
-        "name": "AirPlay volume"
       }
     },
     "sensor": {
-      "uptime": {
-        "name": "Uptime"
-      },
       "memory_available": {
         "name": "Available memory"
-      },
-      "memory_total": {
-        "name": "Total memory"
       },
       "cpu_load": {
         "name": "CPU load"
       },
       "bridge_rss": {
-        "name": "Bridge RSS"
-      },
-      "bridge_peak_rss": {
-        "name": "Bridge peak RSS"
-      },
-      "active_source": {
-        "name": "Active source"
-      },
-      "job_status": {
-        "name": "Job status"
-      },
-      "queue_size": {
-        "name": "Queue size"
+        "name": "Bridge memory"
       },
       "airplay_volume": {
         "name": "AirPlay volume"
-      },
-      "airplay_raw_volume": {
-        "name": "AirPlay raw volume"
-      },
-      "conversation_remaining": {
-        "name": "Conversation remaining"
-      }
-    },
-    "binary_sensor": {
-      "online": {
-        "name": "Online"
-      },
-      "voice_active": {
-        "name": "Voice active"
-      },
-      "airplay_active": {
-        "name": "AirPlay active"
-      },
-      "source_uncertain": {
-        "name": "Source uncertain"
       }
     },
     "switch": {
       "listener": {
         "name": "Listening"
-      },
-      "speak_response": {
-        "name": "Speak conversation replies"
-      },
-      "use_context": {
-        "name": "Use shared conversation context"
       }
     },
     "text": {
@@ -157,21 +106,8 @@
       "reset_context": {
         "name": "Reset conversation"
       },
-      "restart_listener": {
-        "name": "Restart listening"
-      }
-    },
-    "select": {
-      "idle_policy": {
-        "name": "Idle volume policy",
-        "state": {
-          "master": "Master",
-          "tts": "TTS",
-          "master_tts": "Master and TTS"
-        }
-      },
-      "agent": {
-        "name": "Conversation agent"
+      "restart_bridge": {
+        "name": "Restart bridge"
       }
     }
   },
@@ -233,10 +169,6 @@
         "use_context": {
           "name": "Use shared context",
           "description": "Use shared context"
-        },
-        "agent_id": {
-          "name": "Conversation agent override",
-          "description": "Conversation agent override"
         },
         "priority": {
           "name": "Priority",
@@ -351,24 +283,6 @@
         "request_id": {
           "name": "Unique request ID",
           "description": "Unique request ID"
-        }
-      }
-    },
-    "set_idle_volume_policy": {
-      "name": "Set idle volume policy",
-      "description": "Set idle volume policy",
-      "fields": {
-        "device_id": {
-          "name": "Speaker device",
-          "description": "Speaker device"
-        },
-        "entity_id": {
-          "name": "Speaker entity",
-          "description": "Speaker entity"
-        },
-        "policy": {
-          "name": "Idle policy",
-          "description": "Idle policy"
         }
       }
     },

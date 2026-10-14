@@ -36,6 +36,13 @@ startup_clock() {
         date +%s
     fi
 }
+# The API's detached caller holds its restart guard on stdin. Do not race an
+# installer, and never let the new daemon inherit this installation guard.
+if [ "${XIAOAI_BRIDGE_RESTART_API:-0}" = 1 ]; then
+    [ "$ACTION" = restart ] && [ "${XIAOAI_SKIP_LISTENER_START:-0}" = 1 ] || exit 2
+    exec 6> "$RUNTIME/xiaoai_bridge.install.lock"
+    flock -s -n 6 || { start_failure installation_in_progress 1;exit 1; }
+fi
 # Recovery can stop our process with a missing/broken config or binary.
 if [ "$ACTION" != stop ];then
     [ -x "$BIN" ] || { start_failure missing_binary 1;exit 1; }
@@ -86,7 +93,7 @@ if owned_pid; then
     start_diagnostic waiting_existing_process 0
 else
     start_diagnostic launching "$STARTUP_BUDGET"
-    "$BIN" 9>&- </dev/null >> "$LOG" 2>&1 &
+    "$BIN" 6>&- 9>&- </dev/null >> "$LOG" 2>&1 &
     child=$!
     launched=true
 fi

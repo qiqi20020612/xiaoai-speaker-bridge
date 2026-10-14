@@ -11,7 +11,6 @@ class QuickControls:
     def __init__(self, coordinator):
         self.coordinator = coordinator
         self.texts = {"announce": "", "send_text": ""}
-        self.settings = {"speak_response": True, "use_context": True}
         self.pending = set()
         self.requests = {}
 
@@ -32,8 +31,6 @@ class QuickControls:
         request_id = uuid.uuid4().hex
         try:
             payload = {"entity_id": entity_id, "text": text, "request_id": request_id}
-            if kind == "send_text":
-                payload.update(self.settings)
             await self.coordinator.hass.services.async_call(
                 DOMAIN, kind, payload, blocking=True, return_response=True, context=context
             )

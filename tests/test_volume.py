@@ -23,19 +23,16 @@ def test_voice_source_is_frozen_before_tts():
     }
     assert choose_source(state).source == "airplay"
     with pytest.raises(BridgeError, match="unsupported_volume_target"):
-        resolve_targets("auto", state, CAPS)
+        resolve_targets("auto", {**state, "active_source": choose_source(state).source}, CAPS)
     assert resolve_targets("tts", state, CAPS) == ["tts"]
 
 
-@pytest.mark.parametrize(
-    "policy,expected", [("master", ["master"]), ("tts", ["tts"]), ("master_tts", ["master", "tts"])]
-)
-def test_idle_policy_ignores_tts(policy, expected):
-    assert resolve_targets("auto", {"tts": {"active": True}}, CAPS, policy) == expected
+def test_idle_target_is_master_and_ignores_tts_playback():
+    assert resolve_targets("auto", {"tts": {"active": True}}, CAPS) == ["master"]
 
 
 def test_all_preflights_airplay_and_prevents_double_attenuation():
-    state = {"airplay": {"active": True}}
+    state = {"airplay": {"active": True}, "active_source": "airplay"}
     with pytest.raises(BridgeError):
         resolve_targets("all", state, CAPS)
     caps = {"volume": {**CAPS["volume"], "airplay": True}}
@@ -130,7 +127,7 @@ def test_volume_language_is_interpreted_in_ha(text, expected):
     assert volume_intent(text) == expected
 
 
-async def test_native_volume_intents_use_frozen_source_and_ha_idle_policy(hass):
+async def test_native_volume_intents_use_frozen_source_and_fixed_master(hass):
     entry = MockConfigEntry(domain=DOMAIN, unique_id="synthetic", options={"idle_policy": "tts"})
     manager = VolumeManager(hass, entry, None)
     manager.caps = CAPS
@@ -139,5 +136,5 @@ async def test_native_volume_intents_use_frozen_source_and_ha_idle_policy(hass):
         manager.plan("大声点", {"source": "airplay"}, "VolumeUp")
     up = manager.plan("大声点", {"source": None}, "VolumeUp")
     down = manager.plan("小声点", {"source": None}, "VolumeDown")
-    assert up["plan"] == [{"target": "tts", "level": 65}]
-    assert down["plan"] == [{"target": "tts", "level": 40}]
+    assert up["plan"] == [{"target": "master", "level": 70}]
+    assert down["plan"] == [{"target": "master", "level": 45}]

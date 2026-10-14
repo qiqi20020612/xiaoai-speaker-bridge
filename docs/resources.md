@@ -1,6 +1,6 @@
 # 资源采样与报告
 
-新增 LX06 常驻 RSS 优化目标 ≤3 MiB，预算目标 ≤5 MiB，空闲额外 CPU <1%。这是待实测目标。**目前常驻服务尚未完成真实 LX06 的启动和负载验收；CLI 能执行不代表任何场景已达到资源预算。** 真机原基线及数据只保存在私有工作站报告，公开仓库无原设备采样。
+新增 LX06 常驻 RSS 优化目标 ≤3 MiB，预算目标 ≤5 MiB，空闲额外 CPU <1%。这是待实测目标。**用户已验收 0.1.6 的运行稳定性；0.1.7 的启动和负载尚未真机复验，CLI/CI 不能证明资源预算。** 真机原基线及数据只保存在私有工作站报告，公开仓库无原设备采样。
 
 ## 已完成的工程约束
 
@@ -8,7 +8,7 @@ C 端固定 8 个连接、16 条幂等结果、3 个 worker，单播报/对话�
 
 构建产物为 ARM EABI5 静态可执行文件；包的空间由安装器在本机估算，不能用二进制体积推断 RSS。控制端不保存音频；现有 TTS 的缓存和回退行为保持原样。自己的日志仅 `/tmp` 且启动日志有界轮转。
 
-`/api/state.system` 包含读取的桥接 RSS/HWM、整机可用内存与 1 分钟 load average。`worker_peak_rss_kb` 来自退出时 `wait4` 的 rusage 高水位，记录至本进程生命周期结束；它是 worker/被收割子树的**单进程峰值指标**，不是同时运行的所有进程物理内存之和，也不是整机 CPU 使用率。
+`/api/state.system` 只保留当前 Bridge 常驻进程 RSS、整机可用内存与 1 分钟 load average。删除常规探测的 VmHWM、MemTotal、uptime、会话倒计时和 worker rusage 峰值；worker 回收使用 waitpid。按需资源采样脚本仍可读进程树与高水位，安装空间和启动 uptime 检查保留。
 
 ## 日后采样
 
@@ -28,7 +28,7 @@ sh /data/xiaoai_bridge/tools/resource_probe.sh BRIDGE_PID 1860 2
 - 整机繁忙比例：`1-Δidle_ticks/Δtotal_ticks`。total 不重复计 guest；idle 含 iowait，需同时保留原 `/proc/stat` 作审阅。
 - `cpu_load` 是 load average，不是 CPU%。采样器自身会产生 awk/cat 开销，应另测关闭采样时的基线，比较额外 CPU。
 - 进程树 RSS 累计只描述采样时的上界/构成，共享页不可简单相加当实际增量。整机 `MemAvailable` 前后差也受既有服务缓存影响。
-- 间隔采样可能漏掉短命子进程；同时保存 API 的 `worker_peak_rss_kb`、父进程 VmHWM 与实际音频子进程的高水位。高压场景可缩短到 1 秒，注意观测开销。
+- 间隔采样可能漏掉短命子进程；需要峰值时用按需采样保存父进程 VmHWM 与实际音频子进程的高水位。高压场景可缩短到 1 秒，注意观测开销。
 - HA 端使用同一测试条件记录 HA 进程 RSS/CPU 前后差，并保留版本、加载集成数；不要把开发机 HA fixture 结果冒充树莓派实测。
 
 ## 待填验收表
@@ -44,7 +44,7 @@ sh /data/xiaoai_bridge/tools/resource_probe.sh BRIDGE_PID 1860 2
 | KWS/STT | 双通道唤醒、录音、成功/失败/重复唤醒 | 未执行 |
 | 普通语音/TTS | 原 Agent、五分钟滑动上下文、原 TTS/回退 | 未执行 |
 | 主动播报 | 普通/urgent、取消、临时音量，至少 32 条有界负载 | 未执行 |
-| 文字对话 | 上下文双向衔接、silent reply、Agent 隔离 | 未执行 |
+| 文字对话 | 上下文双向衔接、silent reply、单次无上下文 | 未执行 |
 | 并发 | 语音录音中播报/文字/音量同时到达 | 未执行 |
 | 断线恢复 | HA/bridge 中断，确认不重播/不重复设备动作 | 未执行 |
 | 重启/升级/卸载 | Cron、退出、原语音、保留原服务 | 未执行 |

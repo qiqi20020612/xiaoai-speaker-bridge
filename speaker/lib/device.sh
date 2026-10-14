@@ -66,20 +66,13 @@ probe() {
     recovery_pending=false
     bridge_has_pending_recovery && recovery_pending=true
     [ "$recovery_pending" = false ] || announcement_ducking=false
-    uptime=$(cut -d. -f1 /proc/uptime)
     available=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
-    total=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
     read load rest < /proc/loadavg
-    rss=null; peak=null
+    rss=null
     if [ -n "${XIAOAI_BRIDGE_PID:-}" ] && [ -r "/proc/$XIAOAI_BRIDGE_PID/status" ]; then
         rss=$(awk '/^VmRSS:/{print $2}' "/proc/$XIAOAI_BRIDGE_PID/status")
-        peak=$(awk '/^VmHWM:/{print $2}' "/proc/$XIAOAI_BRIDGE_PID/status")
     fi
-    rss=${rss:-null};peak=${peak:-null}
-    remaining=null
-    if [ -r "$BRIDGE_RUNTIME/eoai_conversation.json" ]; then
-        remaining=$(jq -r --argjson now "$(date +%s)" 'if (.ts|type)=="number" then [0, 300-($now-.ts)]|max else null end' "$BRIDGE_RUNTIME/eoai_conversation.json" 2>/dev/null || printf null)
-    fi
+    rss=${rss:-null}
     jq -nc \
         --argjson master "$master" --argjson tts "$tts" --argjson bt "$bt" --argjson headphone "$headphone" \
         --argjson has_master "$has_master" --argjson has_tts "$has_tts" --argjson has_bt "$has_bt" --argjson has_headphone "$has_headphone" \
@@ -91,16 +84,14 @@ probe() {
         --argjson ap_write "$airplay_write" --argjson ir "$ir" \
         --argjson announcement_ducking "$announcement_ducking" \
         --argjson recovery_pending "$recovery_pending" \
-        --argjson uptime "$uptime" --argjson available "$available" --argjson total "$total" --argjson load "$load" --argjson rss "$rss" --argjson peak "$peak" \
-        --argjson remaining "$remaining" \
+        --argjson available "$available" --argjson load "$load" --argjson rss "$rss" \
         '{capabilities:{volume:{master:$write_master,tts:$has_tts,bluetooth:$write_bt,headphone:$has_headphone,airplay:$ap_write},volume_read:{master:$has_master,tts:$has_tts,bluetooth:$has_bt,headphone:$has_headphone,airplay:$ap_read},
           playback:{airplay:{read:$ap_read,actions:$ap_actions},bluetooth:{read:$bt_read,actions:$bt_actions}},
           announce:$can_tts,conversation:$can_conversation,voice_hooks:$hook,listener:true,infrared:$ir,announcement_ducking:$announcement_ducking},
           state:{volume_recovery_pending:$recovery_pending,volumes:{master:$master,tts:$tts,bluetooth:$bt,headphone:$headphone,airplay:$ap_pct},
           airplay:{active:$ap_active,available:$ap_available,state:$ap_state,raw_volume:$ap_raw,volume:$ap_pct,muted:$ap_muted},
           bluetooth:{active:$bt_active,state:$bt_state,connected_name:$bt_name},listener:{running:$listener},
-          system:{uptime:$uptime,memory_available:$available,memory_total:$total,cpu_load:$load,bridge_rss:$rss,bridge_peak_rss:$peak},
-          conversation:{remaining:$remaining}}}'
+          system:{memory_available:$available,cpu_load:$load,bridge_rss:$rss}}}'
 }
 
 case "$1" in
@@ -156,27 +147,7 @@ case "$1" in
         . "$config"
         state=${EOAIC2_STATE:-}
         case "$state" in /tmp/*) ;; *) fail conversation_adapter_missing ;; esac
-        if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json" ]; then
-            agent=$(jq -r '.agent_id // empty' "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json")
-            bridge_valid_agent "$agent" || fail invalid_agent
-            [ "$agent" != "${EOAIC2_AGENT_ID:-}" ] && state="$BRIDGE_RUNTIME/xiaoai_bridge.context.$agent.json"
-        fi
         rm -f "$state"
-        printf '{"completed":true}\n'
-        ;;
-    agent)
-        agent=$(request_value '.agent_id')
-        if [ "$agent" != null ]; then
-            bridge_valid_agent "$agent" || fail invalid_agent
-        fi
-        exec 9> "$BRIDGE_RUNTIME/xiaoai_bridge.session.lock"
-        flock -n 9 || fail busy
-        voice_busy && fail busy
-        if [ "$agent" = null ];then
-            rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json"
-        else
-            printf '%s' "$REQUEST" | jq -c '{agent_id:.agent_id}' | atomic_json "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json"
-        fi
         printf '{"completed":true}\n'
         ;;
     ir)

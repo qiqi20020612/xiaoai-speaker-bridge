@@ -12,10 +12,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     register_capability_entities(
         entry,
         async_add_entities,
-        [
-            VolumeNumber(coordinator, key)
-            for key in ("master", "tts", "bluetooth", "headphone", "airplay")
-        ],
+        [VolumeNumber(coordinator, key) for key in ("master", "tts", "bluetooth")],
     )
 
 

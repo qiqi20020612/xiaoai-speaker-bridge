@@ -412,8 +412,7 @@ int bridge_json_cli(int argc, char **argv) {
     else if (argc == 6 && !strcmp(op, "recovery-plan") && load(&a, args[0], 0) == 0 &&
              load(&b, args[1], 1) == 0)
         result = recovery(&a, &b, args);
-    else if (argc == 2 &&
-             (!strcmp(op, "revision") || !strcmp(op, "owner") || !strcmp(op, "journal-fields")) &&
+    else if (argc == 2 && (!strcmp(op, "owner") || !strcmp(op, "journal-fields")) &&
              load(&a, args[0], 1) == 0 && object(&a, 0)) {
         double n;
         const char *name = !strcmp(op, "owner") ? "owner" : "revision";

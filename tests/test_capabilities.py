@@ -52,7 +52,9 @@ async def test_late_capabilities_loss_recovery_and_offline_keep_identity(hass, m
         await hass.async_block_till_done()
     button = registry.async_get_entity_id("button", DOMAIN, uid)
     assert button and hass.states.get(button).state != "unavailable"
-    assert registry.async_get_entity_id("number", DOMAIN, "synthetic-speaker_volume_airplay")
+    assert (
+        registry.async_get_entity_id("number", DOMAIN, "synthetic-speaker_volume_airplay") is None
+    )
     size = len(registry.entities)
     caps["conversation"] = False
     with patch.object(c.client, "state", AsyncMock(return_value={**STATE, "capabilities": caps})):
@@ -80,7 +82,9 @@ async def test_late_capabilities_loss_recovery_and_offline_keep_identity(hass, m
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_legacy_sensor_ids_and_manual_enabled_choice_are_preserved(hass, mock_clients):
+async def test_retired_sensor_is_removed_and_retained_enabled_choice_is_preserved(
+    hass, mock_clients
+):
     entry = MockConfigEntry(
         domain=DOMAIN, title="Synthetic speaker", data=DATA, unique_id="synthetic-speaker"
     )
@@ -104,9 +108,8 @@ async def test_legacy_sensor_ids_and_manual_enabled_choice_are_preserved(hass, m
     )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.get(legacy.entity_id) is not None
+    assert registry.async_get(legacy.entity_id) is None
     assert hass.states.get(enabled.entity_id) is not None
-    assert registry.async_get(legacy.entity_id).disabled_by is None
     assert registry.async_get_entity_id("sensor", DOMAIN, "synthetic-speaker_memory_total") is None
     assert (
         registry.async_get_entity_id("sensor", DOMAIN, "synthetic-speaker_airplay_raw_volume")
@@ -123,8 +126,7 @@ async def test_quick_text_submits_once_and_repeats_after_completion(hass, mock_c
     assert registry.async_get_entity_id("button", DOMAIN, f"synthetic-speaker_{kind}_send") is None
     speak = registry.async_get_entity_id("switch", DOMAIN, "synthetic-speaker_speak_response")
     context = registry.async_get_entity_id("switch", DOMAIN, "synthetic-speaker_use_context")
-    assert hass.states.get(speak).state == hass.states.get(context).state == "on"
-    await hass.services.async_call("switch", "turn_off", {"entity_id": speak}, blocking=True)
+    assert speak is None and context is None
     c.quick.texts[kind] = "stale buffered text"
     finish = asyncio.Event()
 
@@ -146,7 +148,7 @@ async def test_quick_text_submits_once_and_repeats_after_completion(hass, mock_c
         assert submit.call_args.args[0] == kind
         assert submit.call_args.args[1]["text"] == "synthetic non-sensitive instruction"
         if kind == "send_text":
-            assert submit.call_args.args[1]["speak_response"] is False
+            assert submit.call_args.args[1]["speak_response"] is True
             assert submit.call_args.args[1]["use_context"] is True
         assert hass.states.get(text_id).state == ""
         first_id = c.quick.requests[kind]

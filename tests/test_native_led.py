@@ -152,9 +152,9 @@ def test_old_owner_cannot_end_or_reclaim_new_animation(native_led, speaker_shell
 . "{path / "bridge/lib/task-feedback.sh"}"
 MODE=announce
 bridge_feedback_setup
-bridge_feedback_stage processing
+bridge_feedback_begin
 printf '%s different-start\\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.feedback"
-bridge_feedback_stage playing
+bridge_feedback_begin
 bridge_feedback_end
 bridge_feedback_recover after-voice "$$" "$BRIDGE_FEEDBACK_START"
 '''
@@ -172,7 +172,7 @@ def test_killed_owner_is_recovered_without_a_resident_worker(native_led, speaker
 . "{path / "bridge/lib/task-feedback.sh"}"
 MODE=announce
 bridge_feedback_setup
-bridge_feedback_stage processing
+bridge_feedback_begin
 printf 'ready\\n'
 read hold
 '''
@@ -235,7 +235,7 @@ def test_original_airplay_guard_yields_and_replays_after_native_task(native_led,
 . "{path / "bridge/lib/task-feedback.sh"}"
 MODE=announce
 bridge_feedback_setup
-bridge_feedback_stage processing
+bridge_feedback_begin
 printf '100 0\\n' > "$STATE_DIR/airplay_led.state"
 "{adapter}" --worker
 printf '%s\\n' 0 > "$STATE_DIR/airplay_led.last"
@@ -260,7 +260,7 @@ def test_led_lock_failure_keeps_owner_for_later_recovery(native_led, speaker_she
 . "{path / "bridge/lib/task-feedback.sh"}"
 MODE=announce
 bridge_feedback_setup
-bridge_feedback_stage processing
+bridge_feedback_begin
 printf 'ready\\n'
 read finish
 bridge_feedback_end
@@ -300,7 +300,7 @@ def test_voice_reservation_before_led_lock_keeps_deferred_cleanup(native_led, sp
 . "{path / "bridge/lib/task-feedback.sh"}"
 MODE=announce
 bridge_feedback_setup
-bridge_feedback_stage processing
+bridge_feedback_begin
 # A live voice owner has reserved priority but has not acquired the LED lock.
 printf '%s %s\\n' '{os.getpid()}' "$(bridge_pid_start '{os.getpid()}' 2>/dev/null || true)" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
 bridge_feedback_end
@@ -355,6 +355,8 @@ def test_probe_omits_manual_led_even_with_old_flags_and_corrupt_state(native_led
     assert result.returncode == 0, result.stderr
     response = json.loads(result.stdout)
     assert "led" not in response["capabilities"] and "led" not in response["state"]
+    assert set(response["state"]["system"]) == {"memory_available", "bridge_rss", "cpu_load"}
+    assert "conversation" not in response["state"]
     result = subprocess.run(
         [*speaker_shell, str(device), "led"],
         input='{"on":false}',
@@ -388,7 +390,7 @@ def test_voice_preemption_defers_airplay_replay_until_voice_ends(
 . "{path / "bridge/lib/task-feedback.sh"}"
 MODE=announce
 bridge_feedback_setup
-bridge_feedback_stage processing
+bridge_feedback_begin
 printf 'ready\\n'
 read finish
 bridge_feedback_end
@@ -700,7 +702,7 @@ async def test_upgrade_removes_only_own_manual_light_and_never_registers_it(
     assert all(registry.async_get(e.entity_id) is not None for e in keep)
     assert dr.async_get(hass).async_get(device.id) is not None
     assert entry.data == DATA and entry.unique_id == "synthetic-speaker"
-    assert entry.options == {"agent_id": "conversation.existing"}
+    assert entry.options == {}
     assert Platform.LIGHT not in PLATFORMS
     assert "xiaoai_speaker.light" not in hass.config.components
     diagnostics = await async_get_config_entry_diagnostics(hass, entry)

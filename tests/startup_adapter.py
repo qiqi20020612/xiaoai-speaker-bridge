@@ -33,4 +33,4 @@ elif kind == "invalid_response":
 elif kind == "overflow":
     print(marker * 2000)
 else:
-    print(json.dumps({"capabilities": {"listener": True}, "state": {"system": {"uptime": 1}}}))
+    print(json.dumps({"capabilities": {"listener": True}, "state": {"system": {}}}))

@@ -37,12 +37,9 @@ async def async_get_config_entry_diagnostics(hass, entry):
         "system": {
             k: state.get("system", {}).get(k)
             for k in (
-                "uptime",
                 "memory_available",
-                "memory_total",
                 "cpu_load",
                 "bridge_rss",
-                "bridge_peak_rss",
             )
         },
         "active_source": state.get("active_source"),
@@ -50,6 +47,4 @@ async def async_get_config_entry_diagnostics(hass, entry):
         "airplay": {
             k: state.get("airplay", {}).get(k) for k in ("active", "state", "volume", "raw_volume")
         },
-        "last_job_status": c.jobs.last.get("status"),
-        "queue_size": c.jobs.queue.qsize(),
     }

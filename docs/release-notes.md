@@ -1,13 +1,16 @@
-0.1.7 移除独立 LED 灯环控制，HA 主动播报和文字对话默认复用 LX06 的原生灯效。当前为待审阅版本，尚未合并或发布；没有操作真实 LX06 或 HA。
+0.1.7 是功能与代码精简版本，包含 LX06 原生 LED 重构。当前仅 PR #6 待审阅，未合并、未建 Tag、未发布；未连接或操作真实 LX06 / Home Assistant。
 
-CI 产物包含 LX06 ARM EABI5 hard-float 静态安装包、HA ZIP、`RELEASE_NOTES.md` 和 `SHA256SUMS`。在同一目录执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`），通过后才准备部署副本。
+- HA 完整 LX06 能力下保留 14 个实体，所有保留 Unique ID 不变。Media Player 保留标准播放状态和原音源属性；AirPlay 百分比传感器附加原始 dB。
+- 删除 light、binary_sensor、select 平台与实现；移除手动 RGB、来源/语音/AirPlay 状态展示、两个对话开关、Agent 选择、空闲策略及多余诊断/通道实体。按当前配置条目、平台、域和 Unique ID 精确清理旧注册项，禁用/改名同样处理；保留设备身份、配对、凭据和其他用户配置。
+- 快捷文字仍通过原 announce/send_text 服务，提交成功后清空；speak_response/use_context 动作参数保留、默认 true。删除 agent_id 动作参数、Agent 覆盖 API/状态读写/独立缓存逻辑，固定使用原 Listener/EOAIC2 配置。旧覆盖记录不再影响执行；重置会话清除原 EOAIC2_STATE，原 OAuth 与五分钟上下文保留。
+- 删除 set_idle_volume_policy 服务和配置，空闲 auto 固定 master；活动 AirPlay/蓝牙/MPD 自动路由、显式通道和双重衰减保护不变。原音源优先级继续可配置。
+- 重启按钮名称和行为改为只重启 Bridge，保留 restart_listener Unique ID 与自定义 Entity ID。现有 start.sh 强制跳过 Listener，短期锁防重复，立即接受调度，不入队或等待重启成功。活动任务/语音和安装竞争保护仍在。
+- 删除展示专用的 uptime、MemTotal、VmHWM、会话倒计时探测/JSON、worker rusage 峰值和 HA jobs.last 重复快照；保留当前常驻 Bridge RSS、可用内存、CPU load、健康检查和内部任务接口。
+- 删除 /api/led、手动 RGB/亮度/颜色 helper 和状态。任务复用 show_led 1 → 2 → 11、shut_led 1/2/3；缺少命令时安全跳过。只在开始/结束协调灯光，去掉合成/播放的重复锁操作。保留原语音优先、LED 所有权/异常清理、AirPlay Guard 与活动检查后最新音量灯恢复。
+- 支持 0.1.6 原地升级：私有 format=4/hooks=4/KWS guard=1/AirPlay guard=3 不变。配置、UUID、Token、Listener/KWS/OAuth、音量曲线、有效历史备份、失败自动恢复与回滚保留。旧灯效 verified 字段忽略，不重写整份配置。
 
-- 删除 HA `light` 平台、手动 RGB/亮度实体及翻译、`/api/led`、设备端独立 `led` 操作、`capabilities.led` / `state.led`、手动状态记录和 RGB JSON helper。旧控制接口返回 404。其他实体 Unique ID、两个文本操作和现有服务 API 保留。
-- 首次成功连接后，精确清理本配置条目、`xiaoai_speaker` 平台、`light` 域、`<设备 Unique ID>_led` 的旧实体，包括禁用和用户改名的实体。设备注册、其他实体、配置和自动化不删除；曾引用旧灯环的自动化需由用户调整。
-- 原 Launcher 的顺序是 `show_led 1` → `show_led 2` → `show_led 11` → `shut_led 1/2/3`，其中 `show_led 3` 已注释。远程任务保持相同原生动画，处理/合成/播放期间沿用 2；不启动录音或 STT，不增加颜色渲染、配置或常驻进程。
-- 原生命令存在时任务灯效自动工作，旧 `verified.led` / `verified.task_led` 值保留但不参与判断。命令缺失或失败不影响播报/对话。保留 FD 灯锁、PID/starttime 所有权、语音优先和原 AirPlay 音量灯/Guard。
-- 正常完成、失败、取消、超时按任务所有权收尾。语音抢占后由语音完成原生收尾；同一文字任务仍存活时续接处理动画，已退出时恢复延期的 AirPlay 灯效。SIGKILL 后使用启动、下一次任务或现有 Cron 的一次性恢复，不新增定时任务。
-- 语音原生收尾未确认成功时保留/重试任务恢复标记。已启用 Guard 必须有符合 source SHA256 的原始备份，缺失或伪备份时安装/恢复/卸载及独立工具均停止，保留仍被引用的 helper。
-- v0.1.6 可原地升级，私有适配契约仍为 format=4 / listener_hooks=4 / KWS guard=1 / AirPlay guard=3，不要求重新生成有效适配器。原生命令和 AirPlay hook 存在时安装要求匹配的私有 Guard，自动复用原工具启用，已有活跃匹配 Guard 不动。快照记录升级前启用状态：失败/回滚保留原先已启用的 Guard，本轮新启用的则恢复原程序。身份、认证、Listener/KWS、AirPlay 曲线、历史备份及当前 OAuth 值保留。
+已移除实体、Agent 参数和 idle 服务属于明确兼容性变化；相关自动化须调整。恢复这些实体的旧自定义 Entity ID/选项需升级前 HA 备份。音箱回滚使用同一完整包 install.sh --rollback，不卸载重装、不删除恢复目录、不覆盖较新 OAuth。
 
-CI 验证 HA/旧实体迁移、真实脱敏 Launcher/AirPlay 结构、jq 1.6、BusyBox、锁/进程退出/取消/安装故障、C sanitizers、ARM QEMU、HACS/hassfest 和包内外 SHA256。自动化不验证原生程序在真机上的动画时长或音频效果。详情及最小真机清单见 [0.1.7 原生灯效说明](https://github.com/qiqi20020612/xiaoai-speaker-bridge/blob/codex/native-led-v017/docs/lx06-v017.md)。
+CI 产物为 LX06 ARM EABI5 hard-float 静态包、HA ZIP、RELEASE_NOTES.md 与 SHA256SUMS；仅用于审阅。验证外部与包内 SHA256 后才准备部署副本。测试覆盖 HA 2026.10、14 实体迁移、原 Agent/上下文、重启故障、真实 jq 1.6、BusyBox、音量/灯效并发、安装恢复、C sanitizers、ARM/QEMU、HACS/hassfest 和包校验。
+
+CI 不代表固件、音频、动画或资源真机验收。完整迁移、升级/回滚与最小测试清单见 [0.1.7 精简说明](https://github.com/qiqi20020612/xiaoai-speaker-bridge/blob/codex/native-led-v017/docs/lx06-v017.md)。

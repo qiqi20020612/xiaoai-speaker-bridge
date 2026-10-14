@@ -6,9 +6,9 @@
 
 `text.sh` 加载现有 listener 配置，再显式加载 `/data/eoai_agent.sh`，验证它确实定义了原 `curl()` 包装函数，保留 listener 已选的 Agent、缓存路径和期限。缺失时返回 `conversation_adapter_missing`，不会绕过它请求默认 HA Agent。listener 中其他同名函数也不能意外替代这个入口。
 
-JSON 中显式设置选中的 `agent_id`；原包装函数负责读原 `EOAIC2_STATE` 的 `{agent,id,ts}`，校验 Agent、时间及原 `EOAIC2_KEEP_SECONDS=300`，注入仍有效的 `conversation_id`，并保存 HA 返回的 ID 和完成时间。桥接没有另写一套上下文读取或滑动期限算法。
+向 HA Conversation 发出的 JSON 仍显式设置原配置 `EOAIC2_AGENT_ID` 对应的 `agent_id`；原包装函数负责读原 `EOAIC2_STATE` 的 `{agent,id,ts}`，校验 Agent、时间及原 `EOAIC2_KEEP_SECONDS=300`，注入仍有效的 `conversation_id`，并保存 HA 返回的 ID 和完成时间。桥接没有另写一套上下文读取或滑动期限算法。
 
-两种输入共用 session FD 锁。默认 Agent 共用原文件；覆盖 Agent 仍调用原函数，仅选择已有契约中的独立文件（最多 8 个覆盖上下文）。单次覆盖不修改已选 Agent。`use_context=false` 将原函数的状态路径临时指向本次工作目录，结束后清除，不读取或延长任何持久会话。
+两种输入共用 session FD 锁。语音和文字共用原默认 EOAIC2 文件。Bridge 不再接受动态 Agent 覆盖，不重写 listener 的 `EOAIC2_AGENT_ID`，也不退回 HA 默认 Agent。`use_context=false` 将原函数的状态路径临时指向本次工作目录，结束后清除，不读取或延长任何持久会话。
 
 成功必须得到带非空 Conversation ID 的有效回复。HTTP/网络错误、错误回复或无 ID 回复均不延长缓存；若原包装函数已经保存错误回复的 ID/时间，桥接在同一锁内恢复之前的内容。上下文处理结束后先释放 session 锁，再等 TTS 音频锁。原豆包 TTS、音量恢复、KWS/STT 都保留。
 
@@ -35,4 +35,6 @@ JSON 中显式设置选中的 `agent_id`；原包装函数负责读原 `EOAIC2_S
 }
 ```
 
-测试检查语音→文字→语音使用同一个 ID、成功后的滑动时间更新、300 秒/未来时间排除、Agent 独立缓存、临时无上下文、缺包装函数拒绝请求、401 原续期表单及新认证头、同 ID 重试、续期失败、断连/500/错误回复不续期或重试，以及音量/TTS/音频锁回归。Linux CI 在真实 BusyBox 1.36.1 ash/flock 下运行，文本链路的 awk/sed 也使用真实 BusyBox applet；测试 HTTP 服务只属于测试环境，运行部署仍严格只有 HA 集成与 LX06 两端。本轮未连接音箱。
+测试检查语音→文字→语音使用同一个 ID、成功后的滑动时间更新、300 秒/未来时间排除、旧覆盖记录不影响原 Agent、拒绝已删除参数、临时无上下文、缺包装函数拒绝请求、401 原续期表单及新认证头、同 ID 重试、续期失败、断连/500/错误回复不续期或重试，以及音量/TTS/音频锁回归。Linux CI 在真实 BusyBox 1.36.1 ash/flock 下运行，文本链路的 awk/sed 也使用真实 BusyBox applet；测试 HTTP 服务只属于测试环境，运行部署仍严格只有 HA 集成与 LX06 两端。本轮未连接音箱。
+
+0.1.7 删除 `/api/conversation/agent`、HA Agent Select、配置条目 `agent_id` 和文字任务单次 `agent_id`。旧 Bridge `/tmp/xiaoai_bridge.agent.json` 及覆盖缓存不读取、不更新；保留残留原字节以便回退旧版本，随原临时目录自然清除，不增加清理分支。重置会话只清除原配置 `EOAIC2_STATE`，不再选择覆盖缓存。原生 HA 请求中的 `agent_id` 属于 EOAIC2 的必需协议，仍保留。

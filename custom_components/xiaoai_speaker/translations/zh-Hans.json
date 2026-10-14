@@ -47,7 +47,6 @@
       "init": {
         "title": "音量和状态选项",
         "data": {
-          "idle_policy": "空闲音量对象",
           "poll_interval": "健康检查间隔（秒）",
           "announce_ducking": "播报时压低已验证的 AirPlay 背景音乐",
           "announce_duck_volume": "背景音乐避让音量上限（%）",
@@ -71,75 +70,25 @@
       },
       "volume_bluetooth": {
         "name": "蓝牙音量"
-      },
-      "volume_headphone": {
-        "name": "耳机音量"
-      },
-      "volume_airplay": {
-        "name": "AirPlay 音量"
       }
     },
     "sensor": {
-      "uptime": {
-        "name": "运行时间"
-      },
       "memory_available": {
         "name": "可用内存"
-      },
-      "memory_total": {
-        "name": "总内存"
       },
       "cpu_load": {
         "name": "CPU 负载"
       },
       "bridge_rss": {
-        "name": "桥接常驻内存"
-      },
-      "bridge_peak_rss": {
-        "name": "桥接峰值内存"
-      },
-      "active_source": {
-        "name": "当前音源"
-      },
-      "job_status": {
-        "name": "任务状态"
-      },
-      "queue_size": {
-        "name": "排队数量"
+        "name": "桥接内存"
       },
       "airplay_volume": {
         "name": "AirPlay 音量"
-      },
-      "airplay_raw_volume": {
-        "name": "AirPlay 原始音量"
-      },
-      "conversation_remaining": {
-        "name": "会话剩余时间"
-      }
-    },
-    "binary_sensor": {
-      "online": {
-        "name": "在线"
-      },
-      "voice_active": {
-        "name": "语音交互中"
-      },
-      "airplay_active": {
-        "name": "AirPlay 活跃"
-      },
-      "source_uncertain": {
-        "name": "音源不确定"
       }
     },
     "switch": {
       "listener": {
         "name": "语音监听"
-      },
-      "speak_response": {
-        "name": "播报对话回复"
-      },
-      "use_context": {
-        "name": "使用共享会话上下文"
       }
     },
     "text": {
@@ -157,21 +106,8 @@
       "reset_context": {
         "name": "重置会话"
       },
-      "restart_listener": {
-        "name": "重启监听"
-      }
-    },
-    "select": {
-      "idle_policy": {
-        "name": "空闲音量策略",
-        "state": {
-          "master": "主音量",
-          "tts": "播报音量",
-          "master_tts": "主音量和播报"
-        }
-      },
-      "agent": {
-        "name": "对话代理"
+      "restart_bridge": {
+        "name": "重启桥接"
       }
     }
   },
@@ -233,10 +169,6 @@
         "use_context": {
           "name": "使用共享上下文",
           "description": "使用共享上下文"
-        },
-        "agent_id": {
-          "name": "本次对话代理",
-          "description": "本次对话代理"
         },
         "priority": {
           "name": "优先级",
@@ -351,24 +283,6 @@
         "request_id": {
           "name": "唯一请求标识",
           "description": "唯一请求标识"
-        }
-      }
-    },
-    "set_idle_volume_policy": {
-      "name": "设置空闲音量策略",
-      "description": "设置空闲音量策略",
-      "fields": {
-        "device_id": {
-          "name": "音箱设备",
-          "description": "音箱设备"
-        },
-        "entity_id": {
-          "name": "音箱实体",
-          "description": "音箱实体"
-        },
-        "policy": {
-          "name": "空闲策略",
-          "description": "空闲策略"
         }
       }
     },

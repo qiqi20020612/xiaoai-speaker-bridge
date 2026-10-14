@@ -40,7 +40,6 @@ class JobManager:
         self._counter = itertools.count()
         self._worker: asyncio.Task | None = None
         self._closed = False
-        self.last: dict = {}
         self._active_text: set[str] = set()
         self._voice_text: dict[str, tuple[str, float]] = {}
 
@@ -122,7 +121,7 @@ class JobManager:
         if kind == "send_text":
             self._active_text.add(text_digest)
         self._trim()
-        self._changed(job)
+        self._changed()
         return job
 
     def _trim(self) -> None:
@@ -130,13 +129,7 @@ class JobManager:
         for key in finished[:-16]:
             del self.jobs[key]
 
-    def _changed(self, job: Job) -> None:
-        self.last = {
-            "request_id": job.request_id,
-            "kind": job.kind,
-            "status": job.status,
-            "queue_size": self.queue.qsize(),
-        }
+    def _changed(self) -> None:
         if self.on_change:
             self.on_change()
 
@@ -162,7 +155,7 @@ class JobManager:
             self._active_text.discard(job.text_digest)
         else:
             await self.client.cancel(request_id)
-        self._changed(job)
+        self._changed()
         return {"request_id": request_id, "status": job.status}
 
     async def _execute(self, job: Job) -> None:
@@ -183,7 +176,7 @@ class JobManager:
                     for k, v in state.items()
                     if k in ("reply_text", "error", "source", "uncertain")
                 }
-                self._changed(job)
+                self._changed()
                 if job.status in TERMINAL:
                     return
             except BridgeError as err:
@@ -208,7 +201,7 @@ class JobManager:
             try:
                 if not job.done.is_set():
                     job.status = "running"
-                    self._changed(job)
+                    self._changed()
                     await self._execute(job)
             except BridgeError as err:
                 job.status = "failed"
@@ -221,7 +214,7 @@ class JobManager:
                 job.done.set()
                 self._active_text.discard(job.text_digest)
                 job.payload.clear()  # Discard instruction text after execution.
-                self._changed(job)
+                self._changed()
                 self.queue.task_done()
 
     async def close(self) -> None:
