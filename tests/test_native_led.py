@@ -364,8 +364,9 @@ def test_probe_omits_manual_led_even_with_old_flags_and_corrupt_state(native_led
 
 
 @pytest.mark.parametrize("task_alive", [False, True])
+@pytest.mark.parametrize("led_failure", [False, True])
 def test_voice_preemption_defers_airplay_replay_until_voice_ends(
-    native_led, speaker_shell, task_alive
+    native_led, speaker_shell, task_alive, led_failure
 ):
     _, path, env = native_led
     adapter = path / "bridge/adapter/airplay-led.sh"
@@ -390,7 +391,7 @@ bridge_feedback_end
 bridge_voice_begin || exit 71
 printf 'ready\\n'
 read finish
-bridge_voice_led_finish || exit 72
+bridge_voice_led_finish || true
 bridge_restore_volume
 '''
     voice_path = path / "bridge/adapter/listener.sh"
@@ -420,8 +421,28 @@ bridge_restore_volume
             assert task.returncode == 0, error
         assert (path / "native-led-calls").read_text().splitlines() == SEQUENCE[:2] + ["show 1"]
         assert not (path / "airplay-replayed").exists()
+        if led_failure:
+            (path / "fail-native").touch()
         _, error = voice.communicate("finish\n", timeout=5)
         assert voice.returncode == 0, error
+        if led_failure:
+            assert (path / "xiaoai_bridge.feedback").exists()
+            assert not (path / "airplay-replayed").exists()
+            (path / "fail-native").unlink()
+            if task_alive:
+                _, error = task.communicate("finish\n", timeout=5)
+                assert task.returncode == 0, error
+            else:
+                subprocess.run(
+                    [*speaker_shell, str(path / "bridge/lib/task-feedback.sh"), "recover"],
+                    env=env,
+                    check=True,
+                    timeout=5,
+                )
+            assert (path / "native-led-calls").read_text().splitlines()[-4:] == SEQUENCE[2:]
+            assert (path / "airplay-replayed").read_text().strip() == "-18"
+            assert not (path / "xiaoai_bridge.feedback").exists()
+            return
         expected = SEQUENCE[:2] + ["show 1"] + SEQUENCE[2:]
         if task_alive:
             # An uncancelled Conversation can wait for voice audio, then resume.

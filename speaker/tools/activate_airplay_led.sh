@@ -37,13 +37,19 @@ if [ -d "$BRIDGE_RUNTIME/airplay_led.lock" ] || [ -f "$BRIDGE_RUNTIME/airplay_le
 fi
 current=$(hash "$ORIGINAL")
 if [ "$MODE" = --remove ];then
-    [ -r "$BACKUP" ] || exit 0
+    [ "$current" != "$expected" ] || exit 0
+    [ -r "$BACKUP" ] || { printf '%s\n' 'Active LED guard is missing its original backup';exit 1; }
     [ "$current" = "$reviewed" ] && [ "$(hash "$BACKUP")" = "$expected" ] || {
         printf '%s\n' 'LED program changed since activation; review a merge before removal';exit 1;
     }
     cp -p "$BACKUP" "$ORIGINAL.xiaoai.new"
 else
-    [ "$current" != "$reviewed" ] || exit 0
+    if [ "$current" = "$reviewed" ];then
+        [ -r "$BACKUP" ] && [ "$(hash "$BACKUP")" = "$expected" ] || {
+            printf '%s\n' 'Active LED guard requires its reviewed original backup';exit 1;
+        }
+        exit 0
+    fi
     [ "$current" = "$expected" ] || { printf '%s\n' 'LED source changed; regenerate and review its sibling';exit 1; }
     if [ -r "$BACKUP" ];then [ "$(hash "$BACKUP")" = "$expected" ] || exit 1;else cp -p "$ORIGINAL" "$BACKUP";fi
     cp -p "$CANDIDATE" "$ORIGINAL.xiaoai.new"

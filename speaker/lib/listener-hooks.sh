@@ -127,9 +127,11 @@ set_volume() {
 }
 
 bridge_voice_release() {
+    bridge_voice_led_verified=false
     if [ "${XIAOAI_VOICE_AUDIO_LOCK:-0}" = 1 ]; then flock -u 8;fi
     export XIAOAI_VOICE_AUDIO_LOCK=0
     if [ "${XIAOAI_VOICE_LED_LOCK:-0}" = 1 ]; then
+        bridge_voice_led_done && bridge_voice_led_verified=true
         # Also cover a failed snapshot/audio reservation after show_led 1.
         if ! bridge_voice_led_done && [ -x /bin/shut_led ]; then
             for bridge_led_mode in 1 2 3; do /bin/shut_led "$bridge_led_mode";done
@@ -144,6 +146,7 @@ bridge_voice_release() {
         if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" ]; then
             "$BRIDGE_DIR/lib/task-feedback.sh" after-voice \
                 "${BRIDGE_PREEMPTED_FEEDBACK_OWNER:-}" "${BRIDGE_PREEMPTED_FEEDBACK_START:-}" \
+                "$bridge_voice_led_verified" \
                 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- </dev/null >/dev/null 2>&1 || true
         fi
     fi

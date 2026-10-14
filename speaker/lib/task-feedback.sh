@@ -101,7 +101,9 @@ bridge_feedback_recover() (
         fi
         flock -u 6;exit 0
     fi
-    if [ "${1:-}" != after-voice ]; then
+    # The voice cycle's done marker proves all native finish calls succeeded.
+    # Without that proof, retry under the LED lock and keep recovery on failure.
+    if [ "${1:-}" != after-voice ] || [ "${4:-false}" != true ]; then
         bridge_feedback_finish_native || { flock -u 6;exit 0; }
     fi
     rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.feedback"

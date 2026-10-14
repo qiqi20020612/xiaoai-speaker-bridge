@@ -838,6 +838,101 @@ def test_same_checked_package_reapplies_guard_removed_for_maintenance(native_gua
     assert (installed / "config.json").read_bytes() == config
 
 
+@pytest.mark.parametrize("mode", ["--apply", "--rollback", "--uninstall"])
+@pytest.mark.parametrize("damage", ["missing", "guarded", "changed"])
+def test_active_guard_requires_recoverable_source_backup(native_guard_installation, mode, damage):
+    call, data, cron, original_cron, original_boot, calls = native_guard_installation
+    old = data / "xiaoai_bridge"
+    private_adapter(data, old / "adapter", led=True)
+    (old / "config.json").write_text('{"enable_listener_adapter":false,"token":"synthetic"}')
+    saved = data / "airplay_volume_led.bak.xiaoai_bridge"
+    shutil.copy2(data / "airplay_volume_led", saved)
+    shutil.copy2(old / "adapter/airplay-led.sh", data / "airplay_volume_led")
+    program = (data / "airplay_volume_led").read_bytes()
+    if damage == "missing":
+        saved.unlink()
+    elif damage == "guarded":
+        saved.write_bytes(program)
+    else:
+        saved.write_text(saved.read_text() + "# independently changed backup\n")
+    if mode == "--rollback":
+        backup = data / "xiaoai_bridge.backup"
+        backup.mkdir()
+        (backup / "status").write_text("installed\n")
+        (backup / "ready").touch()
+        (backup / "airplay_guard_active").touch()
+        shutil.copytree(old, backup / "bridge")
+    result = call(mode)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert old.is_dir() and (old / "adapter/airplay-led.sh").read_bytes() == program
+    assert (data / "airplay_volume_led").read_bytes() == program
+    assert cron.read_text() == original_cron
+    assert (data / "xiaoai_boot.sh").read_text() == original_boot
+    if mode == "--apply":
+        assert not calls.exists() and not (data / "xiaoai_bridge.backup").exists()
+
+
+@pytest.mark.parametrize("mode", ["--apply", "--remove"])
+@pytest.mark.parametrize("damage", ["missing", "guarded", "changed"])
+def test_standalone_guard_tool_checks_backup_before_idempotent_success(
+    native_guard_installation, speaker_shell, mode, damage
+):
+    _, data, *_ = native_guard_installation
+    old = data / "xiaoai_bridge"
+    private_adapter(data, old / "adapter", led=True)
+    shutil.copytree(data.parent / "package/lib", old / "lib")
+    saved = data / "airplay_volume_led.bak.xiaoai_bridge"
+    shutil.copy2(data / "airplay_volume_led", saved)
+    shutil.copy2(old / "adapter/airplay-led.sh", data / "airplay_volume_led")
+    program = (data / "airplay_volume_led").read_bytes()
+    if damage == "missing":
+        saved.unlink()
+    elif damage == "guarded":
+        saved.write_bytes(program)
+    else:
+        saved.write_text(saved.read_text() + "# independently changed backup\n")
+    env = {
+        **os.environ,
+        "PATH": str(data.parent / "tools") + os.pathsep + os.environ["PATH"],
+        "XIAOAI_BRIDGE_DIR": str(old),
+        "XIAOAI_BRIDGE_RUNTIME": str(data.parent / "runtime"),
+    }
+    tool = data.parent / "package/tools/activate_airplay_led.sh"
+    result = subprocess.run(
+        [*speaker_shell, str(tool), mode], env=env, capture_output=True, text=True, timeout=5
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert (data / "airplay_volume_led").read_bytes() == program
+    assert old.is_dir()
+
+
+def test_standalone_guard_valid_apply_remove_and_repeated_remove(
+    native_guard_installation, speaker_shell
+):
+    _, data, *_ = native_guard_installation
+    old = data / "xiaoai_bridge"
+    private_adapter(data, old / "adapter", led=True)
+    shutil.copytree(data.parent / "package/lib", old / "lib")
+    saved = data / "airplay_volume_led.bak.xiaoai_bridge"
+    shutil.copy2(data / "airplay_volume_led", saved)
+    original = saved.read_bytes()
+    shutil.copy2(old / "adapter/airplay-led.sh", data / "airplay_volume_led")
+    guarded = (data / "airplay_volume_led").read_bytes()
+    env = {
+        **os.environ,
+        "PATH": str(data.parent / "tools") + os.pathsep + os.environ["PATH"],
+        "XIAOAI_BRIDGE_DIR": str(old),
+        "XIAOAI_BRIDGE_RUNTIME": str(data.parent / "runtime"),
+    }
+    tool = data.parent / "package/tools/activate_airplay_led.sh"
+    for mode, expected in (("--apply", guarded), ("--remove", original), ("--remove", original)):
+        subprocess.run([*speaker_shell, str(tool), mode], env=env, check=True, timeout=5)
+        assert (data / "airplay_volume_led").read_bytes() == expected
+    saved.unlink()
+    subprocess.run([*speaker_shell, str(tool), "--remove"], env=env, check=True, timeout=5)
+    assert (data / "airplay_volume_led").read_bytes() == original
+
+
 def test_enabled_v013_snapshot_is_restored_after_new_listener_readiness_failure(installation):
     call, data, cron, original_cron, original_boot, calls = installation
     old = data / "xiaoai_bridge"

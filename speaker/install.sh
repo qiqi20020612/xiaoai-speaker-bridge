@@ -34,16 +34,17 @@ check_install_adapters() {
     fi
     # An activated older LED copy cannot be silently retained with a new review:
     # that would race remote feedback and make later removal/rollback unverifiable.
-    if [ -r /data/airplay_volume_led.bak.xiaoai_bridge ] && \
-       ! cmp -s /data/airplay_volume_led.bak.xiaoai_bridge /data/airplay_volume_led;then
-        if [ -n "$selected_adapter" ] && [ -r "$selected_adapter/airplay-led.sh" ] && \
-           cmp -s "$selected_adapter/airplay-led.sh" /data/airplay_volume_led && \
-           [ "$(jq -r '.files["airplay-led.sh"].source_sha256' "$selected_adapter/review.json")" = "$(sha256sum /data/airplay_volume_led.bak.xiaoai_bridge | awk '{print $1}')" ];then
-            : # Retain the matching reviewed AirPlay guard unchanged.
-        else
-            printf '%s\n' 'Active AirPlay LED guard differs from the new private adapter. Run the currently installed tools/activate_airplay_led.sh --remove before upgrading, then regenerate/review and reactivate the new guard after installation.' >&2
-            return 1
-        fi
+    if [ -n "$selected_adapter" ] && [ -r "$selected_adapter/airplay-led.sh" ] && \
+       cmp -s "$selected_adapter/airplay-led.sh" /data/airplay_volume_led;then
+        [ -r /data/airplay_volume_led.bak.xiaoai_bridge ] && \
+        [ "$(jq -r '.files["airplay-led.sh"].source_sha256' "$selected_adapter/review.json")" = "$(sha256sum /data/airplay_volume_led.bak.xiaoai_bridge | awk '{print $1}')" ] || {
+            printf '%s\n' 'Active AirPlay LED guard requires a readable backup matching its reviewed original source.' >&2
+            return 1;
+        }
+    elif [ -r /data/airplay_volume_led.bak.xiaoai_bridge ] && \
+         ! cmp -s /data/airplay_volume_led.bak.xiaoai_bridge /data/airplay_volume_led;then
+        printf '%s\n' 'Active AirPlay LED guard differs from the new private adapter. Run the currently installed tools/activate_airplay_led.sh --remove before upgrading, then regenerate/review and reactivate the new guard after installation.' >&2
+        return 1
     fi
     # Default native feedback needs the original AirPlay hook to cooperate too.
     # Require its reviewed sibling before any installation mutation, no flag.
@@ -163,8 +164,16 @@ remove_listener_include() {
 restore_led() {
     original=/data/airplay_volume_led
     saved=/data/airplay_volume_led.bak.xiaoai_bridge
-    [ -r "$saved" ] || return 0
-    cmp -s "$saved" "$original" && return 0
+    if [ ! -r "$saved" ];then
+        if grep -qF 'xiaoai_bridge/lib/common.sh' "$original" 2>/dev/null;then
+            printf '%s\n' 'Active AirPlay LED guard is missing its original backup; retain bridge helpers.' >&2
+            return 1
+        fi
+        return 0
+    fi
+    # An identical guarded backup is not an original and cannot authorize
+    # detaching helpers during rollback/uninstall. Validate its source hash.
+    if cmp -s "$saved" "$original" && ! grep -qF 'xiaoai_bridge/lib/common.sh' "$original";then return 0;fi
     review="$DEST/adapter/review.json"
     [ -r "$review" ] || { printf '%s\n' 'LED guard needs its private review before removal';return 1; }
     source_hash=$(jq -er '.files["airplay-led.sh"].source_sha256' "$review") || return 1
