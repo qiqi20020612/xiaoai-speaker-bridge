@@ -94,7 +94,9 @@ sh /data/xiaoai_bridge/tools/activate.sh --apply
 
 移除引导时用 `--remove`，**不会恢复可能含过期 OAuth token 的旧配置整份备份**；仅删除自己的精确 include 行，保留当前刷新后的所有值。完整恢复流程使用安装器回滚/卸载。
 
-## 5. 日后启用 AirPlay LED 冲突保护
+## 5. AirPlay LED 冲突保护与独立审核工具
+
+v0.1.7 的正常安装自动复用下述工具启用匹配的已审核 Guard，已有匹配 Guard 不动，不需额外配置。原生命令与 AirPlay hook 均存在但缺少私有 Guard 时，安装预检会拒绝；源哈希不匹配也须先审阅。启用时若音量灯 worker/state 正在活动，事务恢复旧安装，等待其正常结束后重试，不强行停止 AirPlay。下述独立入口保留用于预览、审阅和移除；移除 Guard 后，原 AirPlay 脚本不再与任务灯效互斥，正常使用须通过已审核安装恢复保护。
 
 ```sh
 sh /data/xiaoai_bridge/tools/activate_airplay_led.sh --dry-run
@@ -104,7 +106,7 @@ sh /data/xiaoai_bridge/tools/activate_airplay_led.sh --apply
 
 该独立操作用原 LED 程序的审阅副本加入语音退让逻辑，保留原亮度/颜色/音量映射与防抖。它核验输入、输出哈希并备份原程序，**不触碰 Shairport 配置、hook 路径、软件音量方案或 AirPlay 音频服务**。变更仅作用于 LED 程序，不能当作 AirPlay 反向控制已验证。
 
-`--remove` 只在当前程序与已审阅版本匹配时恢复原 LED 程序。检测到其他更新则停止，要求审阅合并，防止覆盖新的本机改动。卸载会移除 LED 保护；回滚保留与旧 Bridge 适配器精确匹配、哈希有效的 Guard，旧快照不包含匹配副本时才恢复原 LED 程序。
+`--remove` 只在当前程序与已审阅版本匹配时恢复原 LED 程序。检测到其他更新则停止，要求审阅合并，防止覆盖新的本机改动。卸载会移除 LED 保护；回滚根据快照保留原先已启用、与旧 Bridge 精确匹配且哈希有效的 Guard，本轮新启用的则恢复原 LED 程序，原备份保留。
 
 ## 6. 添加 HA 端
 
