@@ -5,7 +5,9 @@ BRIDGE_VOLUME_RECOVERY_LOADED=1
 bridge_volume_journal() {
     journal_path=$1
     journal_values=$2
+    bridge_profile_detail journal_airplay_begin
     journal_ap=$(dbus_get_all org.gnome.ShairportSync || true)
+    bridge_profile_detail journal_airplay_end
     journal_raw=$(printf '%s' "$journal_ap" | dbus_property Volume)
     journal_active=$(printf '%s' "$journal_ap" | dbus_property Active)
     journal_json=$(bridge_json journal "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" "${3:-}" "$journal_values" \

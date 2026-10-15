@@ -35,7 +35,9 @@ bridge_voice_begin() {
     trap 'bridge_voice_exit' HUP INT TERM
     printf '%s\n' "$XIAOAI_VOICE_CYCLE" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice-cycle" || { bridge_voice_release;return 1; }
     exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
+    bridge_profile_detail wake_led_lock_wait
     bridge_lock_for 1 6 || { bridge_voice_release; return 1; }
+    bridge_profile_detail wake_led_lock_ready
     export XIAOAI_VOICE_LED_LOCK=1
     # Retain and remember the existing task, without a second ownership scheme.
     if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" ]; then
@@ -46,10 +48,16 @@ bridge_voice_begin() {
     [ ! -x /bin/show_led ] || /bin/show_led 1
     bridge_profile wake_led
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
+    bridge_profile_detail wake_volume_lock_wait
     bridge_lock_for 3 7 || { bridge_voice_release; return 1; }
+    bridge_profile_detail wake_volume_lock_ready
     BRIDGE_DUCK_TRANSFER=false
+    bridge_profile_detail wake_bluetooth_read_begin
     BRIDGE_BT_SAVED=$(percent bluetooth)
+    bridge_profile_detail wake_bluetooth_read_end
+    bridge_profile_detail wake_master_read_begin
     BRIDGE_MASTER_SAVED=$(percent mysoftvol)
+    bridge_profile_detail wake_master_read_end
     BRIDGE_HARDWARE_MASTER=$BRIDGE_MASTER_SAVED
     [ -n "$BRIDGE_MASTER_SAVED" ] && [ -n "$BRIDGE_BT_SAVED" ] || { flock -u 7;bridge_voice_release;return 1; }
     if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" ]; then
@@ -60,7 +68,9 @@ bridge_voice_begin() {
     [ "$BRIDGE_DUCK_TRANSFER" != true ] || handoff="$BRIDGE_RUNTIME/xiaoai_bridge.duck.json"
     # One atomic commit: neither a failed write nor an unsuccessful audio
     # reservation may discard the remote duck's recoverable baseline.
+    bridge_profile_detail wake_journal_begin
     bridge_volume_journal "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" "$values" "$handoff" "$BRIDGE_HARDWARE_MASTER" || { flock -u 7;bridge_voice_release;return 1; }
+    bridge_profile_detail wake_journal_end
     BRIDGE_VOICE_VOLUME_SAVED=true
     journal_fields=$(bridge_json journal-fields "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json") || {
         flock -u 7;bridge_restore_volume;return 1;
@@ -90,7 +100,9 @@ EOF
 
 bridge_voice_attenuate() {
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
+    bridge_profile_detail attenuation_lock_wait
     bridge_lock_for 3 7 || return 1
+    bridge_profile_detail attenuation_lock_ready
     # The original set_volume launches background amixer children outside this
     # lock. Keep the same two channels but finish both writes before recording.
     if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" ]; then

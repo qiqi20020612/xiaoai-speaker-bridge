@@ -500,10 +500,106 @@ done:
     }
     return 0;
 }
+/* Optional diagnostics only: the normal Listener never runs this helper.
+ * Retain at most a fmt/chunk header, never PCM, and never delay forwarding.
+ * A data frame here is after the original recorder's filters, not ALSA open. */
+struct pcm_trace {
+    unsigned char header[16];
+    size_t have, need;
+    uint64_t skip;
+    unsigned frame;
+    int stage;
+};
+static uint32_t pcm_u32(const unsigned char *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+static int pcm_frame(struct pcm_trace *s, const unsigned char *data, size_t n) {
+    while (n && s->stage >= 0) {
+        if (s->stage == 3) {
+            size_t take = n < s->need ? n : s->need;
+            s->need -= take;
+            if (!s->need) {
+                s->stage = -1;
+                return 1;
+            }
+            return 0;
+        }
+        if (s->stage == 1 && s->skip) {
+            size_t take = s->skip < n ? (size_t)s->skip : n;
+            s->skip -= take;
+            data += take;
+            n -= take;
+            continue;
+        }
+        size_t take = s->need - s->have;
+        if (take > n)
+            take = n;
+        memcpy(s->header + s->have, data, take);
+        s->have += take;
+        data += take;
+        n -= take;
+        if (s->have != s->need)
+            continue;
+        s->have = 0;
+        if (s->stage == 0) {
+            s->stage = memcmp(s->header, "RIFF", 4) || memcmp(s->header + 8, "WAVE", 4) ? -1 : 1;
+            s->need = 8;
+        } else if (s->stage == 2) {
+            unsigned format = s->header[0] | (unsigned)s->header[1] << 8;
+            unsigned channels = s->header[2] | (unsigned)s->header[3] << 8;
+            unsigned align = s->header[12] | (unsigned)s->header[13] << 8;
+            unsigned bits = s->header[14] | (unsigned)s->header[15] << 8;
+            s->frame = format == 1 && channels && channels <= 64 &&
+                               (bits == 8 || bits == 16 || bits == 24 || bits == 32) &&
+                               align == channels * (bits / 8)
+                           ? align
+                           : 0;
+            s->stage = 1;
+            s->need = 8;
+        } else {
+            uint32_t length = pcm_u32(s->header + 4);
+            s->skip = (uint64_t)length + (length & 1);
+            if (!memcmp(s->header, "fmt ", 4) && length >= 16) {
+                s->stage = 2;
+                s->need = 16;
+                s->skip -= 16;
+            } else if (!memcmp(s->header, "data", 4)) {
+                s->stage = s->frame && length >= s->frame ? 3 : -1;
+                s->need = s->frame;
+            }
+        }
+    }
+    return 0;
+}
+static void trace_phase(const char *path, const char *cycle, const char *phase) {
+    if (!*cycle || strspn(cycle, "0123456789.") != strlen(cycle) || strlen(cycle) >= 96)
+        return;
+    int fd = open(path, O_WRONLY | O_APPEND | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
+    struct stat st;
+    if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size < 65280) {
+        /* Same boot-time clock as shell phases, including after suspend. */
+        FILE *clock = fopen("/proc/uptime", "r");
+        double at;
+        if (clock && fscanf(clock, "%lf", &at) == 1) {
+            char line[256];
+            int length = snprintf(line, sizeof line, "pid=%ld phase=%s uptime=%.3f cycle=%s\n",
+                                  (long)getpid(), phase, at, cycle);
+            ssize_t logged = write(fd, line, (size_t)length);
+            (void)logged;
+        }
+        if (clock)
+            fclose(clock);
+    }
+    if (fd >= 0)
+        close(fd);
+}
 int bridge_trace_pcm(const char *path, const char *cycle) {
-    /* Opt-in pass-through: never stores audio. First output can be a WAV header;
-     * it proves recorder output, not the time of the first microphone sample. */
+    /* Byte-exact pass-through; diagnostics never change the audio result.
+     * First-output remains available separately from optional WAV PCM parsing. */
     int recorded = 0;
+    const char *option = getenv("XIAOAI_PROFILE_PCM");
+    int inspect = option && !strcmp(option, "1");
+    struct pcm_trace pcm = {.need = 12};
     char buffer[4096];
     for (;;) {
         ssize_t n = read(STDIN_FILENO, buffer, sizeof buffer);
@@ -515,32 +611,10 @@ int bridge_trace_pcm(const char *path, const char *cycle) {
             return 0;
         if (!recorded) {
             recorded = 1;
-            if (*cycle && strspn(cycle, "0123456789.") == strlen(cycle) && strlen(cycle) < 96) {
-                int fd = open(path, O_WRONLY | O_APPEND | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
-                struct stat st;
-                if (fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size < 65536) {
-                    /* Same boot-time clock/precision as the shell phases, even
-                     * after suspend. Never mix CLOCK_MONOTONIC with /proc uptime. */
-                    FILE *clock = fopen("/proc/uptime", "r");
-                    double at;
-                    if (clock && fscanf(clock, "%lf", &at) == 1) {
-                        char line[256];
-                        int length =
-                            snprintf(line, sizeof line,
-                                     "pid=%ld phase=recording_first_output uptime=%.3f cycle=%s\n",
-                                     (long)getpid(), at, cycle);
-                        /* Best-effort trace failure must not drop microphone
-                         * bytes. Consume the result for fortified libc builds. */
-                        ssize_t logged = write(fd, line, (size_t)length);
-                        (void)logged;
-                    }
-                    if (clock)
-                        fclose(clock);
-                }
-                if (fd >= 0)
-                    close(fd);
-            }
+            trace_phase(path, cycle, "recording_first_output");
         }
+        if (inspect && pcm_frame(&pcm, (const unsigned char *)buffer, (size_t)n))
+            trace_phase(path, cycle, "recording_first_pcm");
         size_t sent = 0;
         while (sent < (size_t)n) {
             ssize_t out = write(STDOUT_FILENO, buffer + sent, (size_t)n - sent);

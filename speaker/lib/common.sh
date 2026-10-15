@@ -34,6 +34,12 @@ bridge_profile() {
     printf 'pid=%s phase=%s uptime=%s%s\n' "$$" "$1" "$profile_clock" "$profile_suffix" >> "$profile_file" || true
 }
 
+# Extra query/lock spans use the same logger, with a separate opt-in because
+# logging itself has observer cost. Disabled calls execute only shell builtins.
+bridge_profile_detail() {
+    [ "${XIAOAI_PROFILE_DETAIL:-0}" != 1 ] || bridge_profile "$1"
+}
+
 bridge_diagnostic_error() {
     # A stable error code only. Never include text, config, OAuth or responses.
     [ "${BRIDGE_TEXT_DIAGNOSTICS:-0}" = 1 ] || return 0
