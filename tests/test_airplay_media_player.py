@@ -263,3 +263,22 @@ async def test_failed_metadata_does_not_reanchor_old_counter_when_it_returns(has
         assert player.media_position == 20
     finally:
         assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_missing_airplay_title_does_not_display_dbus_id_but_keeps_mpd_fallback(
+    hass, mock_clients
+):
+    entry, c = await setup(hass)
+    player = hass.data["media_player"].get_entity("media_player.synthetic_speaker")
+    try:
+        value = state()
+        del value["airplay"]["song"]["title"]
+        await publish(hass, c, value)
+        assert player.media_title is None
+        assert player.media_content_id == "/org/gnome/ShairportSync/123"
+        value["active_source"] = "mpd"
+        value["mpd"] = {"state": "play", "song": {"file": "synthetic/music.flac"}}
+        await publish(hass, c, value)
+        assert player.media_title == "synthetic/music.flac"
+    finally:
+        assert await hass.config_entries.async_unload(entry.entry_id)

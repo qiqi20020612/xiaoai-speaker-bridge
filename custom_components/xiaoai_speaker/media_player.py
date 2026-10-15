@@ -127,7 +127,12 @@ class XiaoAIMediaPlayer(XiaoAIEntity, MediaPlayerEntity):
 
     @property
     def media_title(self):
-        return self._song().get("Title") or self._song().get("title") or self._song().get("file")
+        song = self._song()
+        return (
+            song.get("Title")
+            or song.get("title")
+            or (song.get("file") if self._backend() != "airplay" else None)
+        )
 
     @property
     def media_artist(self):
