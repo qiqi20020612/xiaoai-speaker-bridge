@@ -1,6 +1,6 @@
 0.1.8 是以 v0.1.7 为基线的语音关键路径局部优化版本。目前为开发构建，尚未创建 Tag/Release；本次开发未连接或操作真实 LX06 / Home Assistant。
 
-- 本轮已取得的 Listener 自身 starttime 显式复用于 voice owner 和 Journal；其他调用继续重新读取身份。
+- 本轮已取得且有效的 Listener 自身 starttime 显式复用于 voice owner 和 Journal；为空或无效时重读校验，仍失败则在本轮资源操作前安全退出，避免 PID 复用误判。其他调用继续重新读取身份。
 - 同一份 Shairport 回复一次解析 Volume/Active；已有 Journal JSON 直接原子写入，保留验证、0600、rename、锁和恢复规则。
 - 在无旧恢复/duck、需要衰减的受控唤醒路径中，减少两次 sed、三次 awk、两次 cat。两次 AirPlay 查询、BlueZ/MPD 查询、mixer 读取/写入及 JSON 验证数量保持。
 - 修复查询非零退出仍采信部分 stdout，或拼接 fallback 后将未知误判不活跃；失败注入覆盖 policy、AirPlay、BlueZ、MPD 和 Journal 基线。

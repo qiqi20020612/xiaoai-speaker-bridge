@@ -374,6 +374,70 @@ bridge_restore_volume
     assert journal["start"] == "999"
 
 
+def test_voice_retries_missing_cycle_identity_and_recovers_after_pid_reuse(
+    text_device, speaker_shell
+):
+    _, path, env = text_device
+    enable_airplay_duck_fixture(path)
+    body = f'''. "{path}/bridge/lib/listener-hooks.sh"
+bridge_pid_start() {{
+    printf 'read\\n' >> "$STATE_DIR/identity-reads"
+    [ "$(wc -l < "$STATE_DIR/identity-reads")" -gt 1 ] || return 1
+    printf 999
+}}
+bridge_voice_detected
+saved_cycle=$XIAOAI_VOICE_CYCLE
+bridge_voice_begin || exit 71
+[ "$XIAOAI_VOICE_CYCLE" = "$saved_cycle" ] || exit 72
+[ "$(wc -l < "$STATE_DIR/identity-reads")" -eq 2 ] || exit 73
+cp "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" "$STATE_DIR/saved-journal"
+cp "$BRIDGE_RUNTIME/xiaoai_bridge.voice" "$STATE_DIR/saved-owner"
+voice_busy || exit 74
+bridge_voice_attenuate 10 || exit 75
+bridge_pid_start() {{ printf 1000; }}
+if voice_busy;then exit 76;fi
+bridge_recover_pending || exit 77
+[ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" ] || exit 78
+bridge_restore_volume
+'''
+    result = subprocess.run(
+        [*speaker_shell, "-c", body], env=env, capture_output=True, text=True, timeout=8
+    )
+    assert result.returncode == 0, result.stderr
+    journal = json.loads((path / "saved-journal").read_text())
+    assert journal["start"] == "999"
+    assert (path / "saved-owner").read_text().split() == [str(journal["owner"]), "999"]
+    for channel in ("mysoftvol", "bluetooth"):
+        assert (path / f"mixer-{channel}").read_text().strip() == "60"
+
+
+@pytest.mark.parametrize("identity,status", [("", 0), ("", 1), ("not-a-starttime", 0)])
+def test_unavailable_voice_identity_stops_before_ownership_locks_and_volume(
+    text_device, speaker_shell, identity, status
+):
+    _, path, env = text_device
+    body = f'''. "{path}/bridge/lib/listener-hooks.sh"
+bridge_pid_start() {{
+    printf 'read\\n' >> "$STATE_DIR/identity-reads"
+    printf '%s' "$TEST_IDENTITY"
+    return "$TEST_IDENTITY_STATUS"
+}}
+if bridge_voice_begin;then exit 71;fi
+[ "$(wc -l < "$STATE_DIR/identity-reads")" -eq 2 ] || exit 72
+'''
+    result = subprocess.run(
+        [*speaker_shell, "-c", body],
+        env={**env, "TEST_IDENTITY": identity, "TEST_IDENTITY_STATUS": str(status)},
+        capture_output=True,
+        text=True,
+        timeout=8,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not list(path.glob("xiaoai_bridge.voice*"))
+    assert not list(path.glob("xiaoai_bridge.*.lock"))
+    assert not (path / "mixer-writes").exists()
+
+
 def test_airplay_transition_between_journal_and_snapshot_remains_observable(
     text_device, speaker_shell
 ):

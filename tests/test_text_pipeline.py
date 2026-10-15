@@ -52,14 +52,20 @@ fi
 """,
     )
     assert shutil.which("curl"), "The HTTP integration tests require real curl"
-    # Keep every production script intact except the fixture's local-intent URL:
-    # an ephemeral HTTP port replaces the device's fixed port 80. No curl mock.
+    # An ephemeral HTTP port replaces the device's fixed local-intent port 80.
+    # macOS alone also needs a synthetic /proc stat; Linux CI uses real identity.
+    # No curl mock or change to the process identity/ownership algorithm.
     bridge = tmp_path / "bridge"
     shutil.copytree(ROOT / "speaker/lib", bridge / "lib")
     pipeline = bridge / "lib/text.sh"
     pipeline.write_text(
         pipeline.read_text().replace("http://127.0.0.1/intent", ha_http.url + "/intent")
     )
+    if sys.platform == "darwin":
+        stat = tmp_path / "proc-stat"
+        stat.write_text("1 (synthetic) S " + "0 " * 18 + "999\n")
+        locks = bridge / "lib/locks.sh"
+        locks.write_text(locks.read_text().replace('"/proc/$1/stat"', f'"{stat}"'))
     agent = tmp_path / "existing-eoai-agent.sh"
     shutil.copy(ROOT / "tests/synthetic_eoai_agent.sh", agent)
     auth = tmp_path / "existing-launcher.sh"

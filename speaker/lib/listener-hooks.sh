@@ -31,8 +31,14 @@ bridge_voice_begin() {
     bridge_profile wake_setup_begin
     if ! voice_busy || [ "${voice_owner:-0}" != "$$" ]; then bridge_recover_pending || return 1;fi
     BRIDGE_VOICE_VOLUME_SAVED=false
-    # This cycle already read our immutable starttime. Other owners still use
-    # fresh identity reads; no cross-cycle or foreign-process cache is added.
+    # Reuse only a valid identity. A transient detection read failure must not
+    # create PID-only ownership; stop before acquiring resources if retry fails.
+    case "${voice_cycle_start-}" in
+        ''|*[!0-9]*)
+            voice_cycle_start=$(bridge_pid_start "$$" 2>/dev/null) || return 1
+            case "$voice_cycle_start" in ''|*[!0-9]*) return 1 ;; esac
+            ;;
+    esac
     bridge_mark_owner "$BRIDGE_RUNTIME/xiaoai_bridge.voice" "${voice_cycle_start-}" || return 1
     trap 'bridge_voice_exit' HUP INT TERM
     printf '%s\n' "$XIAOAI_VOICE_CYCLE" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice-cycle" || { bridge_voice_release;return 1; }
