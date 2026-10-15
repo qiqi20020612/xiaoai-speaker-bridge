@@ -1,4 +1,4 @@
-0.1.7 是功能与代码精简版本，包含 LX06 原生 LED 重构。当前仅 PR #6 待审阅，未合并、未建 Tag、未发布；未连接或操作真实 LX06 / Home Assistant。
+0.1.7 是功能与代码精简版本，包含 LX06 原生 LED 重构。改动通过 PR #6 合并；开发与发布未连接或操作真实 LX06 / Home Assistant。
 
 - HA 完整 LX06 能力下保留 14 个实体，所有保留 Unique ID 不变。Media Player 保留标准播放状态和原音源属性；AirPlay 百分比传感器附加原始 dB。
 - 删除 light、binary_sensor、select 平台与实现；移除手动 RGB、来源/语音/AirPlay 状态展示、两个对话开关、Agent 选择、空闲策略及多余诊断/通道实体。按当前配置条目、平台、域和 Unique ID 精确清理旧注册项，禁用/改名同样处理；保留设备身份、配对、凭据和其他用户配置。
@@ -11,6 +11,6 @@
 
 已移除实体、Agent 参数和 idle 服务属于明确兼容性变化；相关自动化须调整。恢复这些实体的旧自定义 Entity ID/选项需升级前 HA 备份。音箱回滚使用同一完整包 install.sh --rollback，不卸载重装、不删除恢复目录、不覆盖较新 OAuth。
 
-CI 产物为 LX06 ARM EABI5 hard-float 静态包、HA ZIP、RELEASE_NOTES.md 与 SHA256SUMS；仅用于审阅。验证外部与包内 SHA256 后才准备部署副本。测试覆盖 HA 2026.10、14 实体迁移、原 Agent/上下文、重启故障、真实 jq 1.6、BusyBox、音量/灯效并发、安装恢复、C sanitizers、ARM/QEMU、HACS/hassfest 和包校验。
+正式 Release 附件为 LX06 ARM EABI5 hard-float 静态包、HA ZIP、RELEASE_NOTES.md 与 SHA256SUMS。验证外部与包内 SHA256 后才准备部署副本。测试覆盖 HA 2026.10、14 实体迁移、原 Agent/上下文、重启故障、真实 jq 1.6、BusyBox、音量/灯效并发、安装恢复、C sanitizers、ARM/QEMU、HACS/hassfest 和包校验。
 
-CI 不代表固件、音频、动画或资源真机验收。完整迁移、升级/回滚与最小测试清单见 [0.1.7 精简说明](https://github.com/qiqi20020612/xiaoai-speaker-bridge/blob/codex/native-led-v017/docs/lx06-v017.md)。
+CI 不代表固件、音频、动画或资源真机验收。完整迁移、升级/回滚与最小测试清单见 [0.1.7 精简说明](https://github.com/qiqi20020612/xiaoai-speaker-bridge/blob/v0.1.7/docs/lx06-v017.md)。

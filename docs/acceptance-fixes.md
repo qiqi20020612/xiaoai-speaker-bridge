@@ -83,6 +83,6 @@ task_begin→task_parsed 测本地解析；session_wait→session_ready 测锁�
 
 ## 手动升级与复验
 
-v0.1.7 尚未合并/发版，审阅后使用同一提交 CI 产物及其 SHA256SUMS，由用户授权部署。从已验证的 v0.1.6 原地升级，沿用通过哈希校验的 format=4/hook=4、KWS=1、AirPlay guard=3 私有副本；不改设备 UUID/token、OAuth、Agent、KWS/STT/TTS、AirPlay 曲线或旧验证字段，不卸载、不删除恢复备份。详细步骤及最小实测见 [v0.1.7 原生灯效说明](lx06-v017.md)。
+v0.1.7 使用 [正式 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.1.7) 附件及其 SHA256SUMS，由用户授权部署。从已验证的 v0.1.6 原地升级，沿用通过哈希校验的 format=4/hook=4、KWS=1、AirPlay guard=3 私有副本；不改设备 UUID/token、OAuth、Agent、KWS/STT/TTS、AirPlay 曲线或旧验证字段，不卸载、不删除恢复备份。详细步骤及最小实测见 [v0.1.7 原生灯效说明](lx06-v017.md)。
 
 不兼容的活跃 AirPlay Guard 仍按安装器原规则拒绝；已匹配的 v0.1.6 Guard 不必移除再启用。失败恢复沿用同一完整包的 --rollback，恢复升级前 v0.1.6；HA 回退保留其他实体 ID，已移除的旧手动灯光若要恢复自定义 ID，使用升级前 HA 备份。旧灯光自动化不会自动修改或删除。
