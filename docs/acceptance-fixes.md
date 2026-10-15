@@ -29,6 +29,8 @@ v0.1.7 移除独立灯光实体及颜色 API。HA 排队中的任务不抢灯；
 
 音源快照与锁内 Journal 保留各自的 AirPlay 查询时刻。后一次查询失败、停止或缺少有效发送端音量时，删除尚未应用的本次记录并跳过衰减；不以较早观测替代恢复基线。恢复仍待处理时，HA 利用现有 volume_recovery_pending 状态暂停导入硬件音量，避免把临时 10% 保存成新的期望值。
 
+Probe 在短暂的非阻塞 Volume Lock 内关联 mixer 读数与任一 Journal 的存在状态（包含活跃 owner），避免查询期间恢复完毕后把旧临时值标成可信。锁忙则本次本地音量为 null 并暂停导入；DBus/BlueZ 全部在释放锁后执行，下一次原有 Probe 再更新。该保护覆盖 voice-volume、duck、tts-volume，不改写恢复或所有权规则。
+
 HA 不再显示避让开关和上限，加载配置条目时只清理 announce_ducking/announce_duck_volume 旧选项，保留其他配置。音箱示例和 probe 删除专用验证标记/能力；旧配置中残留的 verified.announcement_ducking 不参与判断。协议 1 保持，旧端在过渡期间发送的合法数值 duck_volume 仍通过类型校验但被忽略，不能改变固定衰减目标。先更新音箱端再更新 HA；新 HA 连接旧音箱时原播报/对话继续可用，自动避让需新版音箱端。
 
 复用原语音的 bridge_volume_journal / bridge_volume_recover_locked、通道版本与音量锁。取消、TTS 失败、超时的 TERM 清理恢复原值或用户新目标。独立 duck Journal 保留语音抢占所需的原始基线，在 volume.lock 下移交给 listener；旧任务不把衰减值当原值，也不覆盖录音期衰减。恢复锁/混音器失败保留 /tmp 恢复记录，释放音频/语音/LED 所有权后有界重试，下一次安全操作也重试。发送端目标已改变时不回写旧 master；若当前值仍为衰减值、无法确认发送端新目标，保留 Journal 待明确目标解决，不猜测映射。/tmp 掉电丢失、实际路由、听感及共享控件竞态仍需真机验收。

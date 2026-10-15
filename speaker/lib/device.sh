@@ -13,10 +13,26 @@ probe() {
     printf '%s' "$controls" | grep -q "'bluetooth'" && has_bt=true
     printf '%s' "$controls" | grep -q "'headphone volume'" && has_headphone=true
     master=null; tts=null; bt=null; headphone=null
-    [ "$has_master" = true ] && master=$(percent mysoftvol)
-    [ "$has_tts" = true ] && tts=$(percent notifyvol)
-    [ "$has_bt" = true ] && bt=$(percent bluetooth)
-    [ "$has_headphone" = true ] && headphone=$(percent 'headphone volume')
+    # Cache mixer values and their temporary ownership together. Any Journal
+    # still awaits restoration, even with a live owner: a task can end before
+    # this probe's later DBus calls finish and C publishes audio_active=false.
+    # Never queue behind voice/recovery, or hold this lock across source probes.
+    recovery_pending=true
+    exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
+    if flock -n 7; then
+        [ "$has_master" = true ] && master=$(percent mysoftvol)
+        [ "$has_tts" = true ] && tts=$(percent notifyvol)
+        [ "$has_bt" = true ] && bt=$(percent bluetooth)
+        [ "$has_headphone" = true ] && headphone=$(percent 'headphone volume')
+        recovery_pending=false
+        for recovery_kind in voice-volume duck tts-volume; do
+            if [ -e "$BRIDGE_RUNTIME/xiaoai_bridge.$recovery_kind.json" ]; then
+                recovery_pending=true;break
+            fi
+        done
+        flock -u 7
+    fi
+    exec 7>&-
     master=${master:-null}; tts=${tts:-null}; bt=${bt:-null}; headphone=${headphone:-null}
     ap=$(dbus_get_all org.gnome.ShairportSync || true)
     apr=$(dbus_get_all org.gnome.ShairportSync.RemoteControl || true)
@@ -61,8 +77,6 @@ probe() {
     fi
     ir=false
     flag '.verified.infrared' && [ -w /sys/ir_tx_gpio/ir_data ] && ir=true
-    recovery_pending=false
-    bridge_has_pending_recovery && recovery_pending=true
     available=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
     read load rest < /proc/loadavg
     rss=null

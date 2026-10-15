@@ -53,6 +53,8 @@ HA `Store` 持久保存成功确认的期望值。bridge 重启后，HA 按新 i
 
 主动播报及有声文字回复由音箱端自动避让唯一、确定活跃的 AirPlay，master 高于 10% 时临时降到 10%，低音量不提高。使用同一套 Journal/版本恢复与 duck→voice 交接，不修改发送端音量或重复衰减原生语音。多源、任何未确认音源、无 TTS 时跳过；原 HA 避让选项与专用验证标记不再使用。旧协议数值 duck_volume 仅为过渡兼容而校验并忽略，不作为可配置目标。
 
+Probe 使用同一 Volume Lock 非阻塞采样本地 mixer 与三个 Journal 是否存在，随后释放锁再查询 DBus/BlueZ。采样时任何 Journal（包括活跃 owner）存在，volume_recovery_pending 都为 true，禁止 HA 将该快照的临时音量导入持久期望；任务在后续查询期间恢复也不能使旧样本变可信。锁忙时本次本地音量为 null、该标志为 true，能力保持，按原 Probe 周期重新观察；不等待语音或新增重试任务。
+
 AirPlay 原始 dB ≤ -144 映射静音 0%；其余钳制到 [-30,0] 并线性映射至 [0,100]。这是控制百分比，不是响度百分比；反向 0% 为 -144，其余 `0.3*percent-30`。原 Shairport 衰减曲线不变；发送端同步未实测前反向接口关闭。`all` 在 AirPlay 活跃时不写 master，能力不足时预检失败。
 
 语音与远程文字共享本机 session flock、原 Agent 函数和原 `{agent,id,ts}` 缓存。成功按原五分钟滑动规则更新；失败回复回滚误更新，`use_context=false` 使用临时独立缓存；Agent 固定采用原 Listener/EOAIC2 配置。原 OAuth token 从现有 listener 加载，桥接配置不存 HA 长期 token。`announce` 不进入上述 Conversation 阶段。

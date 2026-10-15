@@ -14,6 +14,7 @@ CI 使用 Python 3.14、Home Assistant 2026.10.0、官方 HA fixture 的 custom-
 | `test_jobs.py` | 失去接收回应仅查询一次、队列优先级/取消、同活跃文字递归防护、多设备隔离 |
 | `test_text_pipeline.py` | 实际 shell + 真实 curl/本机 HTTP；服务端核对 Agent/Conversation ID、语音↔文字同缓存、滑动/过期、原默认 Agent/无上下文、401 原续期与有界重试、失败不续期/不重复、silent reply、临时音量取消恢复 |
 | `test_ducking.py` | 默认 AirPlay 避让、绝对目标与低音量保护、未知/多源跳过、静默文字不衰减、旧标记忽略、Journal/owner/mixer 失败、音量锁竞争、TERM/KILL 恢复、发送端/HA 新目标保护；原抢占/交接回归继续运行 |
+| `test_volume_probe.py` | 实际 Probe 在 DBus 期间跨越三类 Journal 恢复边界，HA 不导入旧临时音量；恢复后新音量可导入、锁忙不读取、读取时互斥、DBus 前释放锁、损坏 Journal 保留 |
 | `test_native_led.py` | 实际原生调用顺序；默认/旧配置、正常/失败/无回复、真实 C 取消/超时、灯锁/语音抢占/孤儿恢复、原 AirPlay Guard 避让与重放、无原生命令安全降级、旧 API/helper 删除、HA 灯环精确迁移 |
 | `test_boot.py` | 原 stop 先返回、进程随后退出；只 stop Squeezelite，done/失败重试 |
 | `test_busybox.py` | 实际 BusyBox 明确拒绝 `-w`；所有调用的参数契约、FD 生命周期、超时/释放/重试、并行临界区互斥 |
