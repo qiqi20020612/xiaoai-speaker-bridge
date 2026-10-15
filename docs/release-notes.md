@@ -7,6 +7,7 @@
 - 复用默认关闭的 XIAOAI_PROFILE；详细阶段和 First PCM 分别额外 opt-in。普通录音不运行 trace helper 或 PCM 解析；诊断保持字节透传、不保存音频，First PCM 不是 ALSA 首样本或声学首字。
 - 增加 cycle 汇总和离线 A/B 工具；正常流程、未知/多源、并发恢复、原 Agent/上下文、14 实体、安装和回滚继续回归。
 - 修正安装文档中已删除的 Agent Select 与空闲音量策略说明。协议、配置、实体 Unique ID、私有适配格式不变。
+- 「播放文字」「执行文字指令」两个原生 TextEntity 成功入队后保留完整原文，下一次成功提交时更新，提交失败不覆盖原状态；保持原生输入、任务反馈与并发保护。
 
 未实施缓存快路径、优先级短路、锁重写或提前 voice_begin；保留两次 AirPlay 观测时刻、原录音/STT/提示音、三个 Journal、通道版本、发送端新音量保护、duck 交接、音频/会话互斥及原 LED Guard。
 

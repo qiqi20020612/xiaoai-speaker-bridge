@@ -31,9 +31,9 @@ HA 配置中的“播报时压低背景音乐”默认关闭；开启后上限�
 
 ## 文本输入隐私
 
-原生 text 操作仅用于非敏感内容，最多 255 个字符，这是 HA State Machine 的限制；较长文本仍使用原服务（4096 字节）。「播放文字」提交即调用 `xiaoai_speaker.announce`，「执行文字指令」提交即调用 `xiaoai_speaker.send_text`，不需要独立发送按钮。提交成功后清空，任务结束后可以再次提交相同文字；空白、NUL 和超长输入拒绝。快捷文字对话使用原服务 speak_response=true、use_context=true 默认值；两个独立开关和其内存状态已删除。交互参考 [Xiaomi Miot 的 TextEntity 动作设计](https://github.com/al-one/hass-xiaomi-miot/blob/master/custom_components/xiaomi_miot/text.py)，执行仍通过本集成原有服务与队列。
+原生 text 操作仅用于非敏感内容，最多 255 个字符，这是 HA State Machine 的限制；较长文本仍使用原服务（4096 字节）。「播放文字」提交即调用 `xiaoai_speaker.announce`，「执行文字指令」提交即调用 `xiaoai_speaker.send_text`，不需要独立发送按钮。成功入队后各自保留完整原文，下一次成功提交时更新；提交失败不覆盖原状态，任务结束后可以再次提交相同文字。后续任务失败仍保留已提交文字，由原有 status/error 属性反馈；空白、NUL 和超长输入继续拒绝。快捷文字对话使用原服务 speak_response=true、use_context=true 默认值；两个独立开关和其内存状态已删除。交互参考 [Xiaomi Miot 的 TextEntity 动作设计](https://github.com/al-one/hass-xiaomi-miot/blob/master/custom_components/xiaomi_miot/text.py)，执行仍通过本集成原有服务与队列。
 
-提交值经过 HA 服务，可能进入服务事件、自动化和日志；旧版已保存的文本状态及历史也不会被删除。输入使用 Password 模式也不能把这些渠道变成安全存储。提交后清空只是方便下一次输入，不删除历史。集成诊断不导出输入、回复或 token。
+实体在当前集成运行期间保留最后一次成功提交的原文；提交值经过 HA 服务，可能进入服务事件、自动化、日志和历史。输入使用 Password 模式也不能把这些渠道变成安全存储。集成诊断不导出输入、回复或 token。
 
 在输入前配置 Recorder 排除**实际的两个 text Entity ID**，例如：
 

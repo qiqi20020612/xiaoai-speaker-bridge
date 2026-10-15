@@ -150,7 +150,7 @@ async def test_quick_text_submits_once_and_repeats_after_completion(hass, mock_c
         if kind == "send_text":
             assert submit.call_args.args[1]["speak_response"] is True
             assert submit.call_args.args[1]["use_context"] is True
-        assert hass.states.get(text_id).state == ""
+        assert hass.states.get(text_id).state == "synthetic non-sensitive instruction"
         first_id = c.quick.requests[kind]
         assert hass.states.get(text_id).attributes["request_id"] == first_id
         assert hass.states.get(text_id).attributes["status"] in ("accepted", "running")
@@ -176,7 +176,7 @@ async def test_quick_text_submits_once_and_repeats_after_completion(hass, mock_c
             await c.jobs.jobs[second_id].done.wait()
         assert submit.call_count == execute_job.call_count == 2
         assert first_id != second_id and not c.quick.pending
-        assert hass.states.get(text_id).state == ""
+        assert hass.states.get(text_id).state == "synthetic non-sensitive instruction"
         assert hass.states.get(text_id).attributes["status"] == "completed"
         assert hass.states.get(text_id).attributes["request_id"] == second_id
         assert hass.states.get(text_id).attributes["error"] is None
@@ -199,7 +199,7 @@ async def test_native_text_privacy_is_explicit_and_recorder_filter_excludes_stat
             "text", "set_value", {"entity_id": text_id, "value": marker}, blocking=True
         )
         assert submit.call_count == 1 and submit.call_args.args[1]["text"] == marker
-    assert hass.states.get(text_id).state == ""
+    assert hass.states.get(text_id).state == marker
     recorder_filter = generate_filter([], [], [], [text_id])
     assert not recorder_filter(text_id)
     assert recorder_filter("media_player.synthetic_speaker")
