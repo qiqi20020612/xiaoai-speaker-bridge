@@ -613,8 +613,6 @@ int bridge_trace_pcm(const char *path, const char *cycle) {
             recorded = 1;
             trace_phase(path, cycle, "recording_first_output");
         }
-        if (inspect && pcm_frame(&pcm, (const unsigned char *)buffer, (size_t)n))
-            trace_phase(path, cycle, "recording_first_pcm");
         size_t sent = 0;
         while (sent < (size_t)n) {
             ssize_t out = write(STDOUT_FILENO, buffer + sent, (size_t)n - sent);
@@ -623,6 +621,12 @@ int bridge_trace_pcm(const char *path, const char *cycle) {
             if (out <= 0)
                 return 1;
             sent += (size_t)out;
+        }
+        /* Forward this block before optional PCM inspection/log I/O. The phase
+         * observes a complete frame passed through the tap, not ADC sampling. */
+        if (inspect && pcm_frame(&pcm, (const unsigned char *)buffer, (size_t)n)) {
+            inspect = 0;
+            trace_phase(path, cycle, "recording_first_pcm");
         }
     }
 }
