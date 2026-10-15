@@ -1,8 +1,10 @@
 """Offline diagnostics and critical-path invariants; never hardware acceptance."""
 
+import fcntl
 import io
 import json
 import os
+import signal
 import socket
 import struct
 import subprocess
@@ -15,8 +17,8 @@ from pathlib import Path
 import pytest
 
 from tests.test_lx06_v016 import json_binary as json_binary
+from tests.test_text_pipeline import enable_airplay_duck_fixture, script
 from tests.test_text_pipeline import ha_http as ha_http
-from tests.test_text_pipeline import script
 from tests.test_text_pipeline import text_device as text_device
 from tools.profile_report import distribution, read_points, summarize
 
@@ -588,3 +590,52 @@ def test_native_mpd_slow_response_and_read_timeout_are_bounded(mpd_cli, mode, ex
             worker.join(timeout=4)
         assert not worker.is_alive() and not errors
         assert result.returncode == 0 and result.stdout.strip() == expected
+
+
+@pytest.mark.parametrize("stop", [signal.SIGTERM, signal.SIGKILL])
+def test_killed_voice_keeps_recoverable_baseline_and_releases_kernel_locks(
+    text_device, speaker_shell, stop
+):
+    _, path, env = text_device
+    enable_airplay_duck_fixture(path)
+    body = f'''. "{path}/bridge/lib/listener-hooks.sh"
+bridge_voice_begin || exit 71
+bridge_voice_attenuate 10 || exit 72
+printf 'ready\\n'
+read -r finish
+'''
+    proc = subprocess.Popen(
+        [*speaker_shell, "-c", body],
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    journal = path / "xiaoai_bridge.voice-volume.json"
+    try:
+        assert proc.stdout.readline() == "ready\n"
+        assert json.loads(journal.read_text())["volumes"] == {"master": 60, "bluetooth": 60}
+        os.killpg(proc.pid, stop)
+        proc.communicate(timeout=8)
+        if stop == signal.SIGKILL:
+            assert journal.exists()
+        result = subprocess.run(
+            [*speaker_shell, "-c", f'. "{path}/bridge/lib/common.sh"\nbridge_recover_pending'],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        assert result.returncode == 0, result.stderr
+        assert not journal.exists()
+        assert (path / "mixer-mysoftvol").read_text().strip() == "60"
+        assert (path / "mixer-bluetooth").read_text().strip() == "60"
+        for resource in ("audio", "led", "volume"):
+            with (path / f"xiaoai_bridge.{resource}.lock").open("a+") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.communicate()
