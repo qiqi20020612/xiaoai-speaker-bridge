@@ -38,3 +38,5 @@ ARM CI 检验 ELF 头、无动态 INTERP、QEMU `--version`。这验证目标 AB
 完成设备部署后按 [覆盖矩阵](coverage.md) A1–E10 回归、按 [资源报告](resources.md) 采样，保留每项证据。发现硬件限制时先报告数据，不把 verification flag 当测试通过。
 
 0.1.7 精简专用门禁：`test_v017_simplification.py` 验证恰好 14 个实体、禁用/改名/跨条目迁移、原 ID 保留、raw dB 属性、单次音源决策、服务默认值、旧参数拒绝和原 EOAIC2 重置。`test_bridge_restart.py` 启动实际 C 与 start.sh，验证即时确认、重复点击、活动语音/任务拒绝、安装竞争、配置失败保留旧守护进程、不调用 Listener 以及锁未继承。原 LED 测试继续覆盖抢占、取消/超时/异常退出及 AirPlay 恢复。完整结果见对应 PR CI 和 JUnit。
+
+0.1.8 的 `test_wake_performance.py` 验证可选 PCM 透传/变长 chunk/跨 read 帧、诊断失败与默认不执行 helper、cycle 汇总与 P95、命令计数、属性解析和原子提交等价、两次 AirPlay 之间启停、查询部分输出后失败、音量读取/Journal 写失败，以及实际 C MPD helper 的隔离 Unix socket 慢响应/超时。安装回归显式覆盖旧版本 0.1.6 和 0.1.7。五分钟上下文、音量/锁/LED、HA 14 实体及重启回归继续运行。工作站合成时间不能换算成 LX06 提速，测量条件和未验收项见 [0.1.8 说明](lx06-v018.md)。

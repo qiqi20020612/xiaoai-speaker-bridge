@@ -112,7 +112,7 @@ sh /data/xiaoai_bridge/tools/activate_airplay_led.sh --apply
 
 HACS 自定义仓库填写本仓库 URL，类型选 Integration。安装并重启 HA；也可手工仅复制 `custom_components/xiaoai_speaker` 到 HA 的 `config/custom_components`。
 
-在 HA 添加集成，读取**本机** `config.json` 的随机桥接 token 配对。不要填写 SSH 密码或复制 HA 长期 token。选项配置轮询间隔、来源优先级和空闲音量对象。Agent select 默认禁用，可在高级实体中启用；`device_default` 使用原配置，其他 Agent 的上下文与默认 Agent 隔离。
+在 HA 添加集成，读取**本机** `config.json` 的随机桥接 token 配对。不要填写 SSH 密码或复制 HA 长期 token。选项保留轮询间隔、来源优先级等当前支持项。自 v0.1.7 起不再提供 Agent Select 或空闲音量策略；空闲 auto 固定 master，Conversation 使用原 Listener/EOAIC2 配置。`use_context=false` 仍可为单次任务使用独立会话。
 
 经过实际手机音量同步/播放控制、蓝牙、IR 测试后，才分别修改这些能力的本地 `verified` 标志并重新加载集成，让对应实体出现。原生任务灯效默认可用，不提供独立灯光实体或验证开关。`verified=true` 是安装者记录的验证结果，不是检测到方法名后的自动推断。
 

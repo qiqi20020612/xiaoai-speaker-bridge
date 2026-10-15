@@ -22,7 +22,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define VERSION "0.1.7"
+#define VERSION "0.1.8"
 #define CLIENTS 8
 #define BODY 12288
 #define OUTPUT 32768
