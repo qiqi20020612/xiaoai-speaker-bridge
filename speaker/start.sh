@@ -75,7 +75,10 @@ stop_bridge() {
         # reserve ownership before acquiring audio, so test the marker as well.
         exec 8> "$RUNTIME/xiaoai_bridge.audio.lock"
         exec 7> "$RUNTIME/xiaoai_bridge.session.lock"
-        if ! flock -n 8 || ! flock -n 7 || voice_busy; then
+        # Voice emits its snapshot before taking audio/session, but only after
+        # volume. Keep that existing gate through the event-socket handoff too.
+        exec 5> "$RUNTIME/xiaoai_bridge.volume.lock"
+        if ! flock -n 8 || ! flock -n 7 || ! flock -n 5 || voice_busy; then
             start_failure restart_voice_busy 1;return 1
         fi
     fi
@@ -96,11 +99,6 @@ case "$ACTION" in
     start) ;;
     *) exit 2 ;;
 esac
-if [ "${XIAOAI_BRIDGE_RESTART_API:-0}" = 1 ]; then
-    # The stop is committed; do not delay a later wake during startup probes or
-    # pass the gates to the new daemon. Voice keeps its original file ownership.
-    exec 7>&- 8>&-
-fi
 if owned_pid; then
     # A Cron/start retry can arrive while the same process is still probing.
     child=$owner
@@ -108,7 +106,9 @@ if owned_pid; then
     start_diagnostic waiting_existing_process 0
 else
     start_diagnostic launching "$STARTUP_BUDGET"
-    "$BIN" 6>&- 9>&- </dev/null >> "$LOG" 2>&1 &
+    ( [ "${XIAOAI_BRIDGE_RESTART_API:-0}" != 1 ] || exec 5>&- 7>&- 8>&-
+      exec 6>&- 9>&-
+      exec "$BIN" ) </dev/null >> "$LOG" 2>&1 &
     child=$!
     launched=true
 fi
@@ -122,6 +122,11 @@ while :;do
             if wait "$child";then result=0;else result=$?;fi
         fi
         start_failure process_exited "$result";exit 1
+    fi
+    if [ "${XIAOAI_BRIDGE_RESTART_API:-0}" = 1 ]; then
+        # Any authenticated health response means the event socket is bound.
+        # Release before the potentially slow device probe, not before launch.
+        case "$health" in 0|3|4|5) exec 5>&- 7>&- 8>&- ;; esac
     fi
     [ "$health" -ne 0 ] || break
     if [ "$health" -ne "$last_health" ];then

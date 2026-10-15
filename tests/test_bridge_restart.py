@@ -4,6 +4,7 @@ import fcntl
 import http.client
 import json
 import os
+import shlex
 import subprocess
 import time
 
@@ -75,7 +76,7 @@ def test_repeated_restart_acknowledges_once_and_preserves_listener(endpoint_fact
 
     # Neither short-lived guard may be inherited by the new daemon.
     def released():
-        for name in ("restart", "install", "audio", "session"):
+        for name in ("restart", "install", "audio", "session", "volume"):
             with (endpoint.runtime / f"xiaoai_bridge.{name}.lock").open("a+") as lock:
                 try:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -111,7 +112,9 @@ def test_installation_starting_after_ack_prevents_restart_mutation(endpoint_fact
     assert "start event=launching" not in endpoint.logs()
 
 
-@pytest.mark.parametrize("late_owner", ["marker", "audio", "session", "waiting_for_start_lock"])
+@pytest.mark.parametrize(
+    "late_owner", ["marker", "audio", "session", "volume", "waiting_for_start_lock"]
+)
 def test_wake_after_restart_ack_aborts_handoff_and_keeps_source_tracking(
     endpoint_factory, late_owner
 ):
@@ -191,6 +194,78 @@ def test_wake_after_restart_ack_aborts_handoff_and_keeps_source_tracking(
             held.close()
 
 
+def test_wake_during_daemon_gap_reaches_replacement_before_probe_finishes(endpoint_factory):
+    endpoint = endpoint_factory([{}, {"delay": 4}, {}])
+    boundary, resume, capture = (endpoint.root / name for name in ("gap", "resume", "capture"))
+    endpoint.start.write_text(
+        endpoint.start.read_text().replace(
+            '    start_diagnostic launching "$STARTUP_BUDGET"',
+            f"    touch '{boundary}'\n"
+            "    waited=0\n"
+            f"    while [ ! -r '{resume}' ]; do\n"
+            '      [ "$waited" -lt 40 ] || exit 1\n'
+            "      sleep 0.05; waited=$((waited+1))\n    done\n"
+            '    start_diagnostic launching "$STARTUP_BUDGET"',
+        )
+    )
+    # Use the actual voice hook and native journal/event helpers. Only hardware
+    # reads/writes and source observation are replaced in the isolated copy.
+    (endpoint.bridge / "lib/source-snapshot.sh").write_text(
+        '#!/bin/sh\nprintf \'{"type":"voice_begin","pid":%s,"source":"airplay",'
+        '"active_sources":["airplay"],"uncertain":false,'
+        '"volumes":{"master":60,"bluetooth":60}}\\n\' "$1"\n'
+    )
+    voice_body = f""". {shlex.quote(str(endpoint.bridge / "lib/listener-hooks.sh"))}
+percent() {{ printf 60; }}
+dbus_get_all() {{ return 0; }}
+amixer() {{ return 0; }}
+bridge_voice_begin || exit 71
+touch {shlex.quote(str(capture))}
+read -r finish
+bridge_restore_volume
+"""
+    proc = endpoint.launch()
+    endpoint.wait_for(lambda: endpoint.request()[0] == 200)
+    original = endpoint.request("/api/state")[1]["instance_id"]
+    assert post(endpoint)[0] == 202
+    endpoint.wait_for(boundary.exists, 5)
+    proc.wait(timeout=3)
+    # The hook emits its snapshot before taking audio/session. Its existing
+    # volume gate must therefore cover this interval without an event receiver.
+    with (endpoint.runtime / "xiaoai_bridge.volume.lock").open("a+") as gate:
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(gate, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    voice = subprocess.Popen(
+        [*endpoint.shell, "-c", voice_body],
+        env={
+            **endpoint.env,
+            "PATH": str(endpoint.root / "tools") + os.pathsep + os.environ["PATH"],
+        },
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        endpoint.wait_for((endpoint.runtime / "xiaoai_bridge.voice").exists, 2)
+        resume.touch()
+        endpoint.wait_for(capture.exists, 5)
+        endpoint.wait_for(lambda: new_instance(endpoint, original, ready=False), 3)
+        state = endpoint.request("/api/state")[1]
+        assert state["voice"]["active"] and state["voice"]["source"] == "airplay"
+        assert state["voice"]["volumes"] == {"master": 60, "bluetooth": 60}
+        assert state["state_stale"]  # Gates release at event readiness, not slow probe readiness.
+        assert (
+            post(endpoint, "/api/tts/announce", {"text": "hello", "request_id": "gap-voice"})[0]
+            == 409
+        )
+    finally:
+        resume.touch()
+        _, error = voice.communicate("finish\n", timeout=8)
+    assert voice.returncode == 0, error
+    endpoint.wait_for(lambda: not endpoint.request("/api/state")[1]["voice"]["active"], 3)
+
+
 @pytest.mark.parametrize("marker", ["99999999 1\n", f"{os.getpid()} 0\n"])
 def test_stale_or_reused_voice_marker_does_not_block_idle_restart(endpoint_factory, marker):
     endpoint = endpoint_factory()
@@ -215,6 +290,25 @@ def test_missing_restart_script_reports_immediate_failure(endpoint_factory):
     finally:
         endpoint.start.write_bytes(source)
         endpoint.start.chmod(0o755)
+
+
+def test_replacement_exec_failure_releases_all_gates_and_can_start_again(endpoint_factory):
+    endpoint = endpoint_factory()
+    proc = endpoint.launch()
+    endpoint.wait_for(lambda: endpoint.request()[0] == 200)
+    source = endpoint.start.read_text()
+    endpoint.start.write_text(
+        source.replace('      exec "$BIN"', '      exit 77\n      exec "$BIN"')
+    )
+    assert post(endpoint)[0] == 202
+    endpoint.wait_for(lambda: "start event=process_exited code=77" in endpoint.logs(), 5)
+    proc.wait(timeout=3)
+    for name in ("restart", "install", "start", "audio", "session", "volume"):
+        with (endpoint.runtime / f"xiaoai_bridge.{name}.lock").open("a+") as gate:
+            fcntl.flock(gate, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    endpoint.start.write_text(source)
+    assert endpoint.command().returncode == 0
+    assert endpoint.request()[0] == 200
 
 
 def test_failed_config_check_leaves_old_daemon_running_and_allows_retry(endpoint_factory):
