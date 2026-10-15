@@ -6,7 +6,7 @@ Home Assistant 2026.10 自定义集成，以及 LX06 `/data` 下的轻量受控�
 
 **用户已确认 v0.1.6 在 LX06 上通过语音、TTS、上下文、音量恢复、AirPlay 并发、任务取消/去重、重启、31 分钟空闲及 8 次播报压力测试。v0.1.7 的精简与原生任务灯效仍需真机复验，自动化不替代硬件验收。** 升级、回滚和最小复验见 [v0.1.7 功能与代码精简说明](docs/lx06-v017.md)。
 
-当前分支开发 **v0.1.8**：减少唤醒前重复解析和 helper 调用，保留实时查询、锁及恢复语义；增加默认关闭的阶段诊断。尚未正式发布，也没有 v0.1.7/v0.1.8 真机提速结论，见 [v0.1.8 测量与兼容性](docs/lx06-v018.md)。
+**v0.1.8** 减少唤醒前重复解析和 helper 调用，保留实时查询、锁及恢复语义；增加默认关闭的阶段诊断、文字提交状态保留、自动 AirPlay 避让和元数据/封面显示。正式安装包见 [v0.1.8 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.1.8)。尚无 v0.1.7/v0.1.8 真机提速结论，见 [v0.1.8 测量与兼容性](docs/lx06-v018.md)。
 
 ## 两端架构
 
@@ -75,7 +75,7 @@ HACS 添加本仓库为 **Integration** 自定义仓库并安装，重启 HA，�
 
 HACS 安装布局与本地 `brand/` 资源遵循 [HACS Integration 要求](https://www.hacs.xyz/docs/publish/integration/) 和 [HA 集成文件结构](https://developers.home-assistant.io/docs/creating_integration_file_structure/)。HACS 只安装 HA 端。安装包固定下载入口是 [GitHub Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases)；尚未发版的构建可从 [CI](https://github.com/qiqi20020612/xiaoai-speaker-bridge/actions/workflows/ci.yml) 获取。仅声明已测 LX06/ARM EABI5 hard-float 兼容，音箱包须由用户审阅部署。
 
-下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS` 到同一目录，执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）。`v*` tag 经全部 CI 后才创建新 Release；手动发布也重新构建、严格校验，不能覆盖已有正式/预发布或草稿。维护者发版流程见[发布说明](docs/releases.md)。已发布基线附件见 [v0.1.7 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.1.7)；v0.1.8 开发构建仅使用对应 CI 产物，当前任务不创建正式 Release。
+下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS` 到同一目录，执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）。`v*` tag 经全部 CI 后才创建新 Release；手动发布也重新构建、严格校验，不能覆盖已有正式/预发布或草稿。维护者发版流程见[发布说明](docs/releases.md)。当前版本附件见 [v0.1.8 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.1.8)，回退基线附件见 [v0.1.7 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.1.7)；设备部署需另行授权。
 
 当前稳定 LX06 可从 **0.1.6 直接原地升级到 0.1.7**；保留 format=4 / hooks=4 / KWS guard=1 / AirPlay guard=3 的已审核私有副本，无需卸载、重新配对或修改旧 verified 字段。部署须在 PR 审阅和用户授权后进行，见 [v0.1.7 说明](docs/lx06-v017.md)。较早版本迁移记录见 [0.1.6](docs/lx06-v016.md) 和 [0.1.5](docs/lx06-v015.md)。
 

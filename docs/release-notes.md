@@ -1,4 +1,4 @@
-0.1.8 是以 v0.1.7 为基线的开发版本，包含语音关键路径局部优化和媒体显示增强。尚未创建 Tag/Release 或部署新版 LX06 / Home Assistant；AirPlay 元数据仅经用户授权进行了真机只读格式核对，未修改设备。
+0.1.8 以 v0.1.7 为基线，包含语音关键路径局部优化和媒体显示增强。本次发布通过自动化验证与离线测量，尚未部署新版 LX06 / Home Assistant；AirPlay 元数据仅经用户授权进行了真机只读格式核对，未修改设备。
 
 - 本轮已取得且有效的 Listener 自身 starttime 显式复用于 voice owner 和 Journal；为空或无效时重读校验，仍失败则在本轮资源操作前安全退出，避免 PID 复用误判。其他调用继续重新读取身份。
 - 同一份 Shairport 回复一次解析 Volume/Active；已有 Journal JSON 直接原子写入，保留验证、0600、rename、锁和恢复规则。
@@ -15,6 +15,6 @@
 
 未实施缓存快路径、优先级短路、锁重写或提前 voice_begin；保留两次 AirPlay 观测时刻、原录音/STT/提示音、三个 Journal、通道版本、发送端新音量保护、duck 交接、音频/会话互斥及原 LED Guard。
 
-离线结果只验证调用数量、输出等价和受控阶段；没有 v0.1.7/v0.1.8 LX06 性能、CPU/RSS 或首字完整性结论。完整测量条件、证据和真机清单见 [v0.1.8 说明](https://github.com/qiqi20020612/xiaoai-speaker-bridge/blob/337fb4588168be15496b967ace6de01bf8173cc6/docs/lx06-v018.md)，包内说明也使用这一固定链接。
+离线结果只验证调用数量、输出等价和受控阶段；没有 v0.1.7/v0.1.8 LX06 性能、CPU/RSS 或首字完整性结论。完整测量条件、证据和真机清单见 [v0.1.8 说明](https://github.com/qiqi20020612/xiaoai-speaker-bridge/blob/v0.1.8/docs/lx06-v018.md)，包内说明也使用这一版本链接。
 
 后续另获部署授权后，取得同一构建的 LX06 ARM 包、HA ZIP、RELEASE_NOTES.md 与 SHA256SUMS，执行 sha256sum --check SHA256SUMS（macOS 使用 shasum -a 256 -c SHA256SUMS），再核验音箱包内清单。校验通过后沿用原地升级，不卸载重配。失败保留恢复目录：failed_restored 表示自动恢复；recovery_required 用同一新包 install.sh --rollback 继续恢复。主动回退也由新包恢复 v0.1.7 快照，保留 UUID/Token、私有适配器、启用状态、有效历史备份和最新 OAuth，不回写旧认证整份备份。本轮未实机安装或回滚。

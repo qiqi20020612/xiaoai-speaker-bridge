@@ -2,7 +2,7 @@
 
 固定下载入口：[Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases)。HACS 仓库更新方式不变，HA ZIP 用于手工安装。
 
-当前开发版本为 **0.1.8**，尚未创建 Tag/Release；发布基线为 v0.1.7。`pyproject.toml`、HA `manifest.json` 和 C `VERSION` 同步更新。正式版本使用 `vX.Y.Z`，预发布使用 `vX.Y.Z-alpha.N`、`-beta.N` 或 `-rc.N`，三个版本字段均须与 tag 的无 v 部分一致。v0.1.8 的离线证据、真机缺口和回退见 [开发说明](lx06-v018.md)。
+本次发布版本为 **0.1.8**，升级与性能对照基线为 v0.1.7。`pyproject.toml`、HA `manifest.json` 和 C `VERSION` 同步更新。正式版本使用 `vX.Y.Z`，预发布使用 `vX.Y.Z-alpha.N`、`-beta.N` 或 `-rc.N`，三个版本字段均须与 tag 的无 v 部分一致。v0.1.8 的离线证据、真机缺口和回退见 [版本说明](lx06-v018.md)。
 
 推送已有 `v*` tag 后，CI 在 tag 的同一提交执行 Python/元数据/隐私/ShellCheck、原生 C 与 ASan/UBSan、真实 BusyBox ash 及 LX06 结构/故障测试、ARM 静态交叉编译/ELF 检查/QEMU CLI 与 HTTP/worker、HACS 和 hassfest。全部通过后才运行发布 job。普通分支或 PR 构建不会发布。
 
