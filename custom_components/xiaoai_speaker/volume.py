@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from homeassistant.helpers.storage import Store
 
 from .client import BridgeError
-from .const import DOMAIN, IDLE_POLICIES, SOURCE_PRIORITY
+from .const import DOMAIN, SOURCE_PRIORITY
 
 
 @dataclass(frozen=True)
@@ -72,17 +72,13 @@ def choose_source(state: dict, priority: tuple | list = SOURCE_PRIORITY) -> Sour
     )
 
 
-def resolve_targets(
-    target: str, state: dict, caps: dict, idle_policy: str = "master", source: str | None = None
-) -> list[str]:
-    if idle_policy not in IDLE_POLICIES:
-        raise BridgeError("invalid_idle_policy")
-    source = source if source is not None else choose_source(state).source
+def resolve_targets(target: str, state: dict, caps: dict, source: str | None = None) -> list[str]:
+    source = source if source is not None else state.get("active_source")
     if target == "auto":
         target = {"mpd": "master", "bluetooth": "bluetooth", "airplay": "airplay"}.get(
-            source, idle_policy
+            source, "master"
         )
-    targets = ["master", "tts"] if target == "master_tts" else [target]
+    targets = [target]
     volumes = caps.get("volume", {})
     if target == "all":
         targets = [v for v in ("master", "tts", "bluetooth", "headphone") if volumes.get(v)]
@@ -174,12 +170,8 @@ class VolumeManager:
                 k: v for k, v in saved.items() if isinstance(v, (int, float)) and 0 <= v <= 100
             }
 
-    @property
-    def idle_policy(self) -> str:
-        return self.entry.options.get("idle_policy", "master")
-
     def targets(self, target: str, source: str | None = None) -> list[str]:
-        return resolve_targets(target, self.state, self.caps, self.idle_policy, source)
+        return resolve_targets(target, self.state, self.caps, source)
 
     def plan(
         self, text: str, snapshot: dict | None = None, local_intent: str | None = None

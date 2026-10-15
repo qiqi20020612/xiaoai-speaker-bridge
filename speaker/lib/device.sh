@@ -59,31 +59,20 @@ probe() {
     if flag '.verified.bluetooth_playback' && [ -n "$bt_state" ]; then
         bt_actions='["play","pause","stop","next","previous"]'
     fi
-    led=false; ir=false
-    if flag '.verified.led'; then
-        [ -w /sys/devices/i2c-0/0-003a/led_rgb ] || [ -w /sys/devices/i2c-0/0-0023/led_rgb ] && led=true
-    fi
+    ir=false
     flag '.verified.infrared' && [ -w /sys/ir_tx_gpio/ir_data ] && ir=true
     announcement_ducking=false
     flag '.verified.announcement_ducking' && announcement_ducking=true
     recovery_pending=false
     bridge_has_pending_recovery && recovery_pending=true
     [ "$recovery_pending" = false ] || announcement_ducking=false
-    uptime=$(cut -d. -f1 /proc/uptime)
     available=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
-    total=$(awk '/^MemTotal:/{print $2}' /proc/meminfo)
     read load rest < /proc/loadavg
-    rss=null; peak=null
+    rss=null
     if [ -n "${XIAOAI_BRIDGE_PID:-}" ] && [ -r "/proc/$XIAOAI_BRIDGE_PID/status" ]; then
         rss=$(awk '/^VmRSS:/{print $2}' "/proc/$XIAOAI_BRIDGE_PID/status")
-        peak=$(awk '/^VmHWM:/{print $2}' "/proc/$XIAOAI_BRIDGE_PID/status")
     fi
-    rss=${rss:-null};peak=${peak:-null}
-    remaining=null
-    if [ -r "$BRIDGE_RUNTIME/eoai_conversation.json" ]; then
-        remaining=$(jq -r --argjson now "$(date +%s)" 'if (.ts|type)=="number" then [0, 300-($now-.ts)]|max else null end' "$BRIDGE_RUNTIME/eoai_conversation.json" 2>/dev/null || printf null)
-    fi
-    led_state='{}';[ -r "$BRIDGE_RUNTIME/xiaoai_bridge.led.json" ] && led_state=$(cat "$BRIDGE_RUNTIME/xiaoai_bridge.led.json")
+    rss=${rss:-null}
     jq -nc \
         --argjson master "$master" --argjson tts "$tts" --argjson bt "$bt" --argjson headphone "$headphone" \
         --argjson has_master "$has_master" --argjson has_tts "$has_tts" --argjson has_bt "$has_bt" --argjson has_headphone "$has_headphone" \
@@ -92,19 +81,17 @@ probe() {
         --argjson ap_actions "$ap_actions" --argjson bt_actions "$bt_actions" --argjson bt_active "$bt_active" --arg bt_state "${bt_state:-unknown}" --arg bt_name "$bt_name" \
         --argjson ap_read "$ap_read" --argjson bt_read "$bt_read" --argjson ap_available "$ap_available" \
         --argjson listener "$listener" --argjson hook "$hook" --argjson can_tts "$can_tts" --argjson can_conversation "$can_conversation" \
-        --argjson ap_write "$airplay_write" --argjson led "$led" --argjson ir "$ir" \
+        --argjson ap_write "$airplay_write" --argjson ir "$ir" \
         --argjson announcement_ducking "$announcement_ducking" \
         --argjson recovery_pending "$recovery_pending" \
-        --argjson uptime "$uptime" --argjson available "$available" --argjson total "$total" --argjson load "$load" --argjson rss "$rss" --argjson peak "$peak" \
-        --argjson remaining "$remaining" --argjson led_state "$led_state" \
+        --argjson available "$available" --argjson load "$load" --argjson rss "$rss" \
         '{capabilities:{volume:{master:$write_master,tts:$has_tts,bluetooth:$write_bt,headphone:$has_headphone,airplay:$ap_write},volume_read:{master:$has_master,tts:$has_tts,bluetooth:$has_bt,headphone:$has_headphone,airplay:$ap_read},
           playback:{airplay:{read:$ap_read,actions:$ap_actions},bluetooth:{read:$bt_read,actions:$bt_actions}},
-          announce:$can_tts,conversation:$can_conversation,voice_hooks:$hook,listener:true,led:$led,infrared:$ir,announcement_ducking:$announcement_ducking},
+          announce:$can_tts,conversation:$can_conversation,voice_hooks:$hook,listener:true,infrared:$ir,announcement_ducking:$announcement_ducking},
           state:{volume_recovery_pending:$recovery_pending,volumes:{master:$master,tts:$tts,bluetooth:$bt,headphone:$headphone,airplay:$ap_pct},
           airplay:{active:$ap_active,available:$ap_available,state:$ap_state,raw_volume:$ap_raw,volume:$ap_pct,muted:$ap_muted},
           bluetooth:{active:$bt_active,state:$bt_state,connected_name:$bt_name},listener:{running:$listener},
-          system:{uptime:$uptime,memory_available:$available,memory_total:$total,cpu_load:$load,bridge_rss:$rss,bridge_peak_rss:$peak},
-          conversation:{remaining:$remaining},led:$led_state}}'
+          system:{memory_available:$available,cpu_load:$load,bridge_rss:$rss}}}'
 }
 
 case "$1" in
@@ -160,41 +147,7 @@ case "$1" in
         . "$config"
         state=${EOAIC2_STATE:-}
         case "$state" in /tmp/*) ;; *) fail conversation_adapter_missing ;; esac
-        if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json" ]; then
-            agent=$(jq -r '.agent_id // empty' "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json")
-            bridge_valid_agent "$agent" || fail invalid_agent
-            [ "$agent" != "${EOAIC2_AGENT_ID:-}" ] && state="$BRIDGE_RUNTIME/xiaoai_bridge.context.$agent.json"
-        fi
         rm -f "$state"
-        printf '{"completed":true}\n'
-        ;;
-    agent)
-        agent=$(request_value '.agent_id')
-        if [ "$agent" != null ]; then
-            bridge_valid_agent "$agent" || fail invalid_agent
-        fi
-        exec 9> "$BRIDGE_RUNTIME/xiaoai_bridge.session.lock"
-        flock -n 9 || fail busy
-        voice_busy && fail busy
-        if [ "$agent" = null ];then
-            rm -f "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json"
-        else
-            printf '%s' "$REQUEST" | jq -c '{agent_id:.agent_id}' | atomic_json "$BRIDGE_RUNTIME/xiaoai_bridge.agent.json"
-        fi
-        printf '{"completed":true}\n'
-        ;;
-    led)
-        flag '.verified.led' || fail unsupported_led
-        exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
-        bridge_lock_for 0 6 || fail busy
-        bridge_led_busy && fail busy
-        led=/sys/devices/i2c-0/0-003a/led_rgb
-        [ -w "$led" ] || led=/sys/devices/i2c-0/0-0023/led_rgb
-        [ -w "$led" ] || fail unsupported_led
-        printf '%s' "$REQUEST" | jq -e '(.on|type)=="boolean" and (if .on then (.rgb|type)=="array" and (.rgb|length)==3 and all(.rgb[];type=="number" and .>=0 and .<=255 and floor==.) and (.brightness|type)=="number" and .brightness>=0 and .brightness<=255 and (.brightness|floor)==.brightness else true end)' >/dev/null || fail invalid_led
-        color=$(printf '%s' "$REQUEST" | jq -r 'if .on then .brightness as $b | .rgb | map(. * $b / 255 | floor) | .[2]*65536+.[1]*256+.[0] else 0 end')
-        i=0;while [ "$i" -lt 18 ]; do printf '%s %s\n' "$i" "$color" > "$led" || fail hardware_control_failed;i=$((i+1));done
-        printf '%s' "$REQUEST" | jq -c '{on:.on,rgb:.rgb,brightness:.brightness}' | atomic_json "$BRIDGE_RUNTIME/xiaoai_bridge.led.json"
         printf '{"completed":true}\n'
         ;;
     ir)

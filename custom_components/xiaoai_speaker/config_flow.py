@@ -14,7 +14,6 @@ from .const import (
     DEFAULT_POLL,
     DEFAULT_PORT,
     DOMAIN,
-    IDLE_POLICIES,
     SOURCE_PRIORITY,
 )
 
@@ -123,7 +122,11 @@ class XiaoAIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class XiaoAIOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input=None):
         errors = {}
-        opts = self.config_entry.options
+        opts = {
+            k: v
+            for k, v in self.config_entry.options.items()
+            if k not in ("agent_id", "idle_policy")
+        }
         priority = opts.get("source_priority", list(SOURCE_PRIORITY))
         if (
             not isinstance(priority, list)
@@ -151,9 +154,6 @@ class XiaoAIOptionsFlow(config_entries.OptionsFlow):
             errors=errors,
             data_schema=vol.Schema(
                 {
-                    vol.Required(
-                        "idle_policy", default=defaults.get("idle_policy", "master")
-                    ): vol.In(IDLE_POLICIES),
                     vol.Required(
                         "poll_interval", default=defaults.get("poll_interval", DEFAULT_POLL)
                     ): vol.All(vol.Coerce(int), vol.Range(min=5, max=300)),

@@ -128,7 +128,7 @@ async def test_text_keeps_service_errors_and_task_failure_feedback(hass, mock_cl
     assert state.attributes["status"] == "failed"
     assert state.attributes["error"] == "synthetic_failure"
     assert state.attributes["request_id"] == request_id and state.state == ""
-    assert entry.options["agent_id"] == "conversation.existing"
+    assert "agent_id" not in entry.options
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -225,6 +225,6 @@ async def test_upgrade_removes_only_own_send_buttons_and_preserves_text_registry
             await hass.services.async_call(
                 "button", "press", {"entity_id": entity_id}, blocking=True
             )
-        assert refresh.call_count == 3
-    assert entry.options == {"agent_id": "conversation.existing", "idle_policy": "tts"}
+        assert refresh.call_count == 2
+    assert entry.options == {}
     assert await hass.config_entries.async_unload(entry.entry_id)

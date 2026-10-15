@@ -174,7 +174,7 @@ def test_voice_text_voice_share_original_sliding_context(text_device, ha_http):
         assert request["headers"]["Authorization"] == "Bearer synthetic-token"
 
 
-def test_no_context_and_agent_override_do_not_mix_the_default_context(text_device, ha_http):
+def test_no_context_does_not_mix_the_default_context(text_device, ha_http):
     call, path, env = text_device
     call("voice", "my name is Alice")
     saved = (path / "eoai_conversation.json").read_text()
@@ -186,15 +186,6 @@ def test_no_context_and_agent_override_do_not_mix_the_default_context(text_devic
     )
     assert (path / "eoai_conversation.json").read_text() == saved
     assert ha_http.conversations[-1]["body"]["agent_id"] == "conversation.synthetic"
-    assert "conversation_id" not in ha_http.conversations[-1]["body"]
-    assert (
-        call("send_text", "what is my name", speak_response=False, agent_id="conversation.other")[
-            1
-        ]["reply_text"]
-        == "unknown"
-    )
-    assert (path / "eoai_conversation.json").read_text() == saved
-    assert ha_http.conversations[-1]["body"]["agent_id"] == "conversation.other"
     assert "conversation_id" not in ha_http.conversations[-1]["body"]
 
 
@@ -234,40 +225,31 @@ def test_real_http_excludes_expired_or_future_conversation_id(text_device, ha_ht
     assert json.loads((path / "eoai_conversation.json").read_text())["id"] != cached["id"]
 
 
-def test_real_http_override_cache_is_shared_without_changing_default_or_selection(
-    text_device, ha_http
+@pytest.mark.parametrize("record", ['{"agent_id":"conversation.other"}', "{malformed"])
+def test_retired_override_never_changes_native_agent_or_shared_context(
+    text_device, ha_http, record
 ):
     call, path, _ = text_device
     call("voice", "my name is Alice", speak_response=False)
-    default = (path / "eoai_conversation.json").read_text()
-    (path / "xiaoai_bridge.agent.json").write_text('{"agent_id":"conversation.other"}')
-    call("voice", "my name is Bob", speak_response=False)
-    override = path / "xiaoai_bridge.context.conversation.other.json"
-    cid = json.loads(override.read_text())["id"]
-    result, reply = call("send_text", "what is my name", speak_response=False)
-    assert result.returncode == 0 and reply["reply_text"] == "Bob"
-    assert ha_http.conversations[-1]["body"]["agent_id"] == "conversation.other"
-    assert ha_http.conversations[-1]["body"]["conversation_id"] == cid
-    saved = override.read_text()
-    result, reply = call(
-        "send_text",
-        "what is my name",
-        speak_response=False,
-        agent_id="conversation.third",
-        use_context=False,
-    )
-    assert result.returncode == 0 and reply["reply_text"] == "unknown"
-    assert ha_http.conversations[-1]["body"]["agent_id"] == "conversation.third"
-    assert "conversation_id" not in ha_http.conversations[-1]["body"]
-    assert (
-        override.read_text() == saved and (path / "eoai_conversation.json").read_text() == default
-    )
-    assert not (path / "xiaoai_bridge.context.conversation.third.json").exists()
-    assert (
-        json.loads((path / "xiaoai_bridge.agent.json").read_text())["agent_id"]
-        == "conversation.other"
-    )
-    assert not list(path.glob("xiaoai_text.*"))
+    cid = json.loads((path / "eoai_conversation.json").read_text())["id"]
+    (path / "xiaoai_bridge.agent.json").write_text(record)
+    legacy = path / "xiaoai_bridge.context.conversation.other.json"
+    legacy.write_text('{"agent":"conversation.other","id":"old-override","ts":1}')
+    for mode in ("voice", "send_text"):
+        result, reply = call(mode, "what is my name", speak_response=False)
+        assert result.returncode == 0 and reply["reply_text"] == "Alice"
+        assert ha_http.conversations[-1]["body"]["agent_id"] == "conversation.synthetic"
+        assert ha_http.conversations[-1]["body"]["conversation_id"] == cid
+    assert legacy.read_text() == '{"agent":"conversation.other","id":"old-override","ts":1}'
+    assert (path / "xiaoai_bridge.agent.json").read_text() == record
+
+
+@pytest.mark.parametrize("agent", [None, "conversation.other"])
+def test_removed_per_task_override_is_rejected_before_any_action(text_device, ha_http, agent):
+    call, path, _ = text_device
+    result, reply = call("send_text", "hello", agent_id=agent)
+    assert result.returncode != 0 and reply["error"] == "invalid_request"
+    assert not ha_http.conversations and not (path / "tts-calls").exists()
 
 
 def test_missing_original_wrapper_fails_without_a_raw_http_fallback(text_device, ha_http):
@@ -368,7 +350,7 @@ def test_real_http_401_reuses_original_refresh_then_same_agent_and_conversation(
     assert not list(path.glob("xiaoai_text.*"))
 
 
-def test_real_http_refresh_keeps_no_context_agent_override_isolated(text_device, ha_http):
+def test_real_http_refresh_keeps_native_no_context_isolated(text_device, ha_http):
     call, path, _ = text_device
     call("voice", "my name is Alice", speak_response=False)
     original = (path / "eoai_conversation.json").read_text()
@@ -377,12 +359,11 @@ def test_real_http_refresh_keeps_no_context_agent_override_isolated(text_device,
         "send_text",
         "what is my name",
         speak_response=False,
-        agent_id="conversation.other",
         use_context=False,
     )
     assert result.returncode == 0 and reply["reply_text"] == "unknown"
     assert all(
-        r["body"]["agent_id"] == "conversation.other" and "conversation_id" not in r["body"]
+        r["body"]["agent_id"] == "conversation.synthetic" and "conversation_id" not in r["body"]
         for r in ha_http.conversations[-2:]
     )
     assert (path / "eoai_conversation.json").read_text() == original
@@ -816,59 +797,6 @@ bridge_restore_volume
         "bluetooth 60%",
     ]
     assert not (path / "xiaoai_bridge.duck.json").exists()
-
-
-def test_feedback_yields_to_voice_and_restores_prior_manual_led(text_device, speaker_shell):
-    _, path, env = text_device
-    led = path / "led_rgb"
-    led.write_text("")
-    feedback = path / "bridge/lib/task-feedback.sh"
-    feedback.write_text(feedback.read_text().replace("/sys/devices/i2c-0/0-003a/led_rgb", str(led)))
-    (path / "xiaoai_bridge.led.json").write_text('{"on":true,"rgb":[1,2,3],"brightness":255}')
-    body = f'''. "{path / "bridge/lib/common.sh"}"
-. "{feedback}"
-MODE=send_text
-TASK_LED_VERIFIED=true
-bridge_feedback_setup
-bridge_feedback_stage processing
-bridge_led_busy || exit 78
-cp "{led}" "$STATE_DIR/processing-color"
-bridge_feedback_end
-cp "{led}" "$STATE_DIR/restored-color"
-bridge_feedback_stage synthesizing
-printf '%s\\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
-printf sentinel > "{led}"
-bridge_feedback_stage playing
-bridge_feedback_end
-'''
-    result = subprocess.run(
-        [*speaker_shell, "-c", body], env=env, capture_output=True, text=True, timeout=5
-    )
-    assert result.returncode == 0, result.stderr
-    assert (path / "processing-color").read_text().strip() == "17 20624"
-    assert (path / "restored-color").read_text().strip() == "17 197121"
-    assert led.read_text() == "sentinel"
-    assert not (path / "xiaoai_bridge.feedback").exists()
-
-
-@pytest.mark.parametrize("task_led", [None, False, True])
-def test_silent_remote_text_has_opt_in_processing_but_no_speech_phases(text_device, task_led):
-    call, path, env = text_device
-    led = path / "led_rgb"
-    led.write_text("")
-    feedback = path / "bridge/lib/task-feedback.sh"
-    feedback.write_text(feedback.read_text().replace("/sys/devices/i2c-0/0-003a/led_rgb", str(led)))
-    config = path / "config.json"
-    values = json.loads(config.read_text())
-    values["verified"] = {"led": True}
-    if task_led is not None:
-        values["verified"]["task_led"] = task_led
-    config.write_text(json.dumps(values))
-    result, _ = call("send_text", "test", speak_response=False)
-    assert result.returncode == 0
-    assert "synthesizing" not in result.stdout and "playing" not in result.stdout
-    assert led.read_text().strip() == ("17 0" if task_led else "")
-    assert not (path / "xiaoai_bridge.feedback").exists()
 
 
 def test_multiline_request_remains_literal_and_profile_has_no_text(text_device, speaker_shell):

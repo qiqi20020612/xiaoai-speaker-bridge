@@ -34,22 +34,30 @@ check_install_adapters() {
     fi
     # An activated older LED copy cannot be silently retained with a new review:
     # that would race remote feedback and make later removal/rollback unverifiable.
-    led_guard_ready=false
-    if [ -r /data/airplay_volume_led.bak.xiaoai_bridge ] && \
-       ! cmp -s /data/airplay_volume_led.bak.xiaoai_bridge /data/airplay_volume_led;then
-        if [ -n "$selected_adapter" ] && [ -r "$selected_adapter/airplay-led.sh" ] && \
-           cmp -s "$selected_adapter/airplay-led.sh" /data/airplay_volume_led && \
-           [ "$(jq -r '.files["airplay-led.sh"].source_sha256' "$selected_adapter/review.json")" = "$(sha256sum /data/airplay_volume_led.bak.xiaoai_bridge | awk '{print $1}')" ];then
-            led_guard_ready=true
-        else
-            printf '%s\n' 'Active AirPlay LED guard differs from the new private adapter. Run the currently installed tools/activate_airplay_led.sh --remove before upgrading, then regenerate/review and reactivate the new guard after installation.' >&2
+    if [ -n "$selected_adapter" ] && [ -r "$selected_adapter/airplay-led.sh" ] && \
+       cmp -s "$selected_adapter/airplay-led.sh" /data/airplay_volume_led;then
+        [ -r /data/airplay_volume_led.bak.xiaoai_bridge ] && \
+        [ "$(jq -r '.files["airplay-led.sh"].source_sha256' "$selected_adapter/review.json")" = "$(sha256sum /data/airplay_volume_led.bak.xiaoai_bridge | awk '{print $1}')" ] || {
+            printf '%s\n' 'Active AirPlay LED guard requires a readable backup matching its reviewed original source.' >&2
+            return 1;
+        }
+    elif [ -r /data/airplay_volume_led.bak.xiaoai_bridge ] && \
+         ! cmp -s /data/airplay_volume_led.bak.xiaoai_bridge /data/airplay_volume_led;then
+        printf '%s\n' 'Active AirPlay LED guard differs from the new private adapter. Run the currently installed tools/activate_airplay_led.sh --remove before upgrading, then regenerate/review and reactivate the new guard after installation.' >&2
+        return 1
+    fi
+    # Default native feedback needs the original AirPlay hook to cooperate too.
+    # Require its reviewed sibling before any installation mutation, no flag.
+    if [ -x /bin/show_led ] && [ -x /bin/shut_led ] && [ -r /data/airplay_volume_led ];then
+        if [ -z "$selected_adapter" ] || [ ! -x "$selected_adapter/airplay-led.sh" ];then
+            bridge_adapter_reject 'Native task effects require the reviewed AirPlay LED guard in the private adapter directory.'
             return 1
         fi
-    fi
-    if [ -n "$selected_config" ] && jq -e '.verified.task_led==true' "$selected_config" >/dev/null 2>&1 && \
-       [ "$led_guard_ready" != true ];then
-        printf '%s\n' 'Remote task LED requires the new activated AirPlay LED guard. Set verified.task_led=false, upgrade and activate/review the guard before enabling task_led.' >&2
-        return 1
+        if ! cmp -s "$selected_adapter/airplay-led.sh" /data/airplay_volume_led && \
+           [ "$(jq -r '.files["airplay-led.sh"].source_sha256' "$selected_adapter/review.json")" != "$(sha256sum /data/airplay_volume_led | awk '{print $1}')" ];then
+            bridge_adapter_reject 'AirPlay LED source no longer matches its private review.'
+            return 1
+        fi
     fi
 }
 adapters_unchanged() {
@@ -60,6 +68,9 @@ adapters_unchanged() {
             cmp -s "$selected_adapter/$name" "$DEST/adapter/$name" || return 1
         fi
     done
+    if [ -x /bin/show_led ] && [ -x /bin/shut_led ] && [ -x "$DEST/adapter/airplay-led.sh" ];then
+        cmp -s "$DEST/adapter/airplay-led.sh" /data/airplay_volume_led || return 1
+    fi
 }
 
 if [ "$MODE" = --dry-run ]; then
@@ -153,8 +164,16 @@ remove_listener_include() {
 restore_led() {
     original=/data/airplay_volume_led
     saved=/data/airplay_volume_led.bak.xiaoai_bridge
-    [ -r "$saved" ] || return 0
-    cmp -s "$saved" "$original" && return 0
+    if [ ! -r "$saved" ];then
+        if grep -qF 'xiaoai_bridge/lib/common.sh' "$original" 2>/dev/null;then
+            printf '%s\n' 'Active AirPlay LED guard is missing its original backup; retain bridge helpers.' >&2
+            return 1
+        fi
+        return 0
+    fi
+    # An identical guarded backup is not an original and cannot authorize
+    # detaching helpers during rollback/uninstall. Validate its source hash.
+    if cmp -s "$saved" "$original" && ! grep -qF 'xiaoai_bridge/lib/common.sh' "$original";then return 0;fi
     review="$DEST/adapter/review.json"
     [ -r "$review" ] || { printf '%s\n' 'LED guard needs its private review before removal';return 1; }
     source_hash=$(jq -er '.files["airplay-led.sh"].source_sha256' "$review") || return 1
@@ -163,6 +182,12 @@ restore_led() {
     [ "$output_hash" = "$(sha256sum "$original" | awk '{print $1}')" ] || {
         printf '%s\n' 'LED program changed; retain bridge helpers until a reviewed merge';return 1;
     }
+    # A compatible upgrade keeps the activated guard. Recovery must keep it too
+    # when the restored Bridge owns that exact reviewed copy; uninstall removes it.
+    if [ "${1:-}" = snapshot ] && [ -f "$BACKUP/airplay_guard_active" ] && \
+       cmp -s "$BACKUP/bridge/adapter/airplay-led.sh" "$original";then
+        return 0
+    fi
     cp -p "$saved" "$original.xiaoai.new" && mv -f "$original.xiaoai.new" "$original"
 }
 capture_retry() {
@@ -248,7 +273,7 @@ recover_snapshot() {
     voice_idle || return 1
     service stop || return 1
     if /etc/init.d/listener status >/dev/null 2>&1; then stop_listener || return 1;fi
-    restore_led || return 1
+    restore_led snapshot || return 1
     if [ ! -d "$BACKUP/bridge" ]; then remove_listener_include || return 1;fi
     capture_retry || return 1
     disable_adapter "$BACKUP/retry" || return 1
@@ -410,6 +435,9 @@ fi
 [ ! -f "$BOOT" ] || cp -p "$BOOT" "$BACKUP/xiaoai_boot.sh"
 [ ! -f "$CRON" ] || cp -p "$CRON" "$BACKUP/crontab.root"
 [ ! -d "$DEST" ] || cp -a "$DEST" "$BACKUP/bridge"
+if [ -n "$selected_adapter" ] && cmp -s "$selected_adapter/airplay-led.sh" /data/airplay_volume_led;then
+    : > "$BACKUP/airplay_guard_active"
+fi
 [ "$LISTENER_WAS_RUNNING" != true ] || : > "$BACKUP/listener_running"
 if [ -r /data/listener ] && grep -qxF "$LISTENER_LINE" /data/listener; then : > "$BACKUP/listener_include";fi
 cp -p "$PACKAGE/xiaoai_boot.sh" "$BACKUP/installed_boot"
@@ -457,6 +485,13 @@ chmod 600 "$CRON.xiaoai.new"
 }
 mv -f "$CRON.xiaoai.new" "$CRON"
 restart_cron
+if [ -x /bin/show_led ] && [ -x /bin/shut_led ] && [ -x "$DEST/adapter/airplay-led.sh" ] && \
+   ! cmp -s "$DEST/adapter/airplay-led.sh" /data/airplay_volume_led;then
+    # Reuse the hash/owner/worker checks of the existing activation tool. A
+    # failure is part of this transaction, with the old guard state restored.
+    XIAOAI_BRIDGE_DIR="$DEST" XIAOAI_BRIDGE_RUNTIME="$RUNTIME" \
+    XIAOAI_BRIDGE_CONFIG="$DEST/config.json" "$DEST/tools/activate_airplay_led.sh" --apply 4>&- 8>&- 9>&-
+fi
 # Keep an existing completed boot flag; no installation-time Squeezelite stop.
 if ! service start;then
     install_diagnostic startup_failed || true

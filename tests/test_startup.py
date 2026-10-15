@@ -75,6 +75,11 @@ class Endpoint:
             .read_text()
             .replace("PATH=/usr/sbin:/usr/bin:/sbin:/bin", f"PATH={tools}:{os.environ['PATH']}")
         )
+        if len(shell) == 2:
+            # C execs this script directly; exercise the target ash here too.
+            self.start.write_text(
+                self.start.read_text().replace("#!/bin/sh", f"#!{shell[0]} {shell[1]}", 1)
+            )
         self.start.chmod(0o755)
         self.port = free_port()
         self.token = "synthetic-startup-token-for-local-testing-00000000"

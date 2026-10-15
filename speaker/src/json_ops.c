@@ -395,30 +395,6 @@ static int desired_update(struct document *doc, char **a) {
     puts("}");
     return 0;
 }
-static int led_color(struct document *doc) {
-    int on = field(doc, 0, "on");
-    if (!object(doc, 0) || on < 0 || doc->d.t[on].type != J_BOOL)
-        return -1;
-    if (!json_bool(&doc->d, on, 0)) {
-        puts("0");
-        return 0;
-    }
-    double b;
-    int rgb = field(doc, 0, "rgb");
-    if (json_number(&doc->d, field(doc, 0, "brightness"), &b) < 0 || b < 0 || b > 255 || rgb < 0 ||
-        doc->d.t[rgb].type != J_ARRAY || doc->d.t[rgb].count != 3)
-        return -1;
-    uint32_t color = 0;
-    int c = 0;
-    for (int k = rgb + 1; k < doc->d.t[rgb].next; k = doc->d.t[k].next) {
-        double n;
-        if (json_number(&doc->d, k, &n) < 0 || n < 0 || n > 255)
-            return -1;
-        color |= (uint32_t)(n * b / 255) << (c++ * 8);
-    }
-    printf("%u\n", color);
-    return 0;
-}
 int bridge_json_cli(int argc, char **argv) {
     struct document a = {0}, b = {0}, c = {0};
     int result = -1;
@@ -428,8 +404,6 @@ int bridge_json_cli(int argc, char **argv) {
         result = load(&a, NULL, 0);
     else if (argc == 3 && !strcmp(op, "desired-update") && load(&a, NULL, 0) == 0)
         result = desired_update(&a, args);
-    else if (argc == 2 && !strcmp(op, "led-color") && load(&a, args[0], 0) == 0)
-        result = led_color(&a);
     else if (argc == 9 && !strcmp(op, "snapshot") && load(&a, NULL, 0) == 0)
         result = snapshot(&a, args);
     else if (argc == 9 && !strcmp(op, "journal") && load(&a, args[0], 1) == 0 &&
@@ -438,8 +412,7 @@ int bridge_json_cli(int argc, char **argv) {
     else if (argc == 6 && !strcmp(op, "recovery-plan") && load(&a, args[0], 0) == 0 &&
              load(&b, args[1], 1) == 0)
         result = recovery(&a, &b, args);
-    else if (argc == 2 &&
-             (!strcmp(op, "revision") || !strcmp(op, "owner") || !strcmp(op, "journal-fields")) &&
+    else if (argc == 2 && (!strcmp(op, "owner") || !strcmp(op, "journal-fields")) &&
              load(&a, args[0], 1) == 0 && object(&a, 0)) {
         double n;
         const char *name = !strcmp(op, "owner") ? "owner" : "revision";

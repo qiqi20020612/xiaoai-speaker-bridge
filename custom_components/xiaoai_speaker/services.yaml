@@ -46,10 +46,6 @@ send_text:
       default: true
       selector:
         boolean: {}
-    agent_id:
-      selector:
-        entity:
-          domain: conversation
     priority: *id004
     request_id: *id005
     wait: *id006
@@ -107,18 +103,6 @@ get_job:
     request_id:
       selector: *id009
       required: true
-set_idle_volume_policy:
-  fields:
-    device_id: *id001
-    entity_id: *id002
-    policy:
-      required: true
-      selector:
-        select:
-          options:
-          - master
-          - tts
-          - master_tts
 get_queue:
   fields:
     device_id: *id001

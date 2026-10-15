@@ -111,6 +111,7 @@ def test_release_assets_have_architecture_versions_and_inner_outer_checksums(ass
         assert tar.getmember("xiaoai_bridge/bin/xiaoai_bridge").mode & 0o100
     with zipfile.ZipFile(next(assets.glob("*.zip"))) as archive:
         assert "custom_components/xiaoai_speaker/text.py" in archive.namelist()
+        assert "custom_components/xiaoai_speaker/light.py" not in archive.namelist()
         assert not any("__pycache__" in name for name in archive.namelist())
 
 

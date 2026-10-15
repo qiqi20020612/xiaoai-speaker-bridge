@@ -572,13 +572,16 @@ def test_upgrade_requires_removing_an_incompatible_active_airplay_led_guard(inst
     assert not calls.exists() and not (data / "xiaoai_bridge.backup").exists()
 
 
-def test_task_led_requires_reviewed_active_airplay_guard_during_upgrade(installation):
+@pytest.mark.parametrize("legacy_flag", [False, True])
+def test_obsolete_led_flags_are_preserved_and_do_not_block_upgrade(installation, legacy_flag):
     call, data, cron, original_cron, original_boot, calls = installation
     config = data.parent / "package/config.json"
-    config.write_text('{"verified":{"task_led":true}}')
+    config.write_text(json.dumps({"verified": {"led": legacy_flag, "task_led": legacy_flag}}))
+    original = config.read_bytes()
     result = call("--apply")
-    assert result.returncode != 0 and "verified.task_led=false" in result.stderr
-    assert not calls.exists() and not (data / "xiaoai_bridge.backup").exists()
+    assert result.returncode == 0, result.stderr
+    assert (data / "xiaoai_bridge/config.json").read_bytes() == original
+    assert (data / "xiaoai_bridge.backup/status").read_text().strip() == "installed"
 
 
 @pytest.mark.parametrize("damage", [None, "hash", "lock", "review"])
@@ -615,6 +618,332 @@ def test_airplay_led_review_and_active_guard_are_verified_before_upgrade(install
         assert call("--dry-run").returncode == 0
         assert call("--apply").returncode == 0
         assert call("--apply").returncode == 0
+
+
+@pytest.mark.parametrize("failure", [None, "bridge_start", "listener_ready"])
+def test_v016_upgrade_and_recovery_keep_private_state_and_airplay_guard(installation, failure):
+    call, data, cron, original_cron, original_boot, calls = installation
+    old = data / "xiaoai_bridge"
+    private_adapter(data, old / "adapter", led=True)
+    review = json.loads((old / "adapter/review.json").read_text())
+    assert review["format"] == 4 and review["compatibility"]["airplay_led_guard"] == 3
+    executable(old / "bin/xiaoai_bridge", "printf '0.1.6\\n'")
+    binary = (old / "bin/xiaoai_bridge").read_bytes()
+    config = {
+        "device_id": "synthetic-v016-stable",
+        "token": "synthetic-v016-stable-token",
+        "enable_listener_adapter": True,
+        "verified": {"led": True, "task_led": False, "airplay_volume": True},
+        "ducking": {"enabled": False, "volume": 20},
+    }
+    (old / "config.json").write_text(json.dumps(config))
+    config_bytes = (old / "config.json").read_bytes()
+    adapter_bytes = {p.name: p.read_bytes() for p in (old / "adapter").iterdir()}
+    listener = data / "listener"
+    listener.write_text(
+        f'HA_TOKEN="synthetic-current"\nHA_REFRESH_TOKEN="synthetic-rotated"\n'
+        'EOAIC2_AGENT_ID="conversation.native_configured"\n'
+        f". {old}/lib/bootstrap.sh\n. /data/kws_bootstrap.sh\n"
+    )
+    agent_config = data / "eoai_agent.sh"
+    agent_config.write_text("# Existing native EOAIC2 wrapper and TTL\nEOAIC2_KEEP_SECONDS=300\n")
+    runtime = data.parent / "runtime"
+    override_record = runtime / "xiaoai_bridge.agent.json"
+    override_record.write_text('{"agent_id":"conversation.old_override"}')
+    native_context = runtime / "eoai_conversation.json"
+    native_context.write_text(
+        '{"agent":"conversation.native_configured","id":"native-cache","ts":1}'
+    )
+    kws = data / "kws_bootstrap.sh"
+    kws.write_text("#!/bin/sh\n# Existing KWS configuration\n")
+    airplay_backup = data / "airplay_volume_led.bak.xiaoai_bridge"
+    shutil.copy2(data / "airplay_volume_led", airplay_backup)
+    shutil.copy2(old / "adapter/airplay-led.sh", data / "airplay_volume_led")
+    airplay_config = data / "shairport-sync.conf"
+    airplay_config.write_text("# Existing volume curve and hook\n")
+    protected = {
+        p: p.read_bytes()
+        for p in (
+            listener,
+            kws,
+            data / "kws_guard.sh",
+            data / "porcupine_launcher_kws",
+            data / "airplay_volume_led",
+            airplay_backup,
+            airplay_config,
+            agent_config,
+            override_record,
+            native_context,
+        )
+    }
+    previous_backup = data / "xiaoai_bridge.backup"
+    previous_backup.mkdir()
+    (previous_backup / "status").write_text("installed\n")
+    (previous_backup / "history").write_bytes(b"retain-earlier-recovery-copy")
+    running = data.parent / "listener-running"
+    running.touch()
+    executable(
+        data.parent / "listener-service",
+        f"""case "$1" in
+ status) [ -f '{running}' ] ;;
+ stop) rm -f '{running}'; printf 'listener-stop\\n' >> "$INSTALL_CALLS" ;;
+ start) touch '{running}'; printf 'listener-old-start\\n' >> "$INSTALL_CALLS" ;;
+esac""",
+    )
+    package = data.parent / "package"
+    fail_ready = data.parent / "fail-ready"
+    executable(
+        package / "lib/listener-service.sh",
+        f"""printf 'listener-new-start\\n' >> "$INSTALL_CALLS"
+if [ -f '{fail_ready}' ]; then rm -f '{fail_ready}'; exit 1; fi
+touch '{running}' """,
+    )
+    # Fail once so the original code can be restarted by transaction recovery.
+    start = package / "start.sh"
+    start.write_text(
+        start.read_text().replace("exit 1\nfi", 'rm "$INSTALL_FAIL_START"\n    exit 1\nfi')
+    )
+    hashes = package / "SHA256SUMS"
+    lines = [row for row in hashes.read_text().splitlines() if not row.endswith("  start.sh")]
+    for name in ("start.sh", "lib/listener-service.sh"):
+        lines.append(hashlib.sha256((package / name).read_bytes()).hexdigest() + "  " + name)
+    hashes.write_text("\n".join(lines) + "\n")
+    if failure == "bridge_start":
+        (data.parent / "fail-start").touch()
+    elif failure == "listener_ready":
+        fail_ready.touch()
+    result = call("--apply")
+    assert (result.returncode == 0) is (failure is None), result.stdout + result.stderr
+    assert (old / "config.json").read_bytes() == config_bytes
+    assert {p.name: p.read_bytes() for p in (old / "adapter").iterdir()} == adapter_bytes
+    for p, original in protected.items():
+        assert p.read_bytes() == original, p.name
+    assert running.exists() and cron.read_text() == original_cron
+    assert (
+        data / "xiaoai_bridge.backup.retained/history"
+    ).read_bytes() == b"retain-earlier-recovery-copy"
+    backup = data / "xiaoai_bridge.backup"
+    assert (backup / "bridge/bin/xiaoai_bridge").read_bytes() == binary
+    assert (backup / "status").read_text().strip() == (
+        "installed" if failure is None else "failed_restored"
+    )
+    if failure is None:
+        assert (old / "bin/xiaoai_bridge").read_bytes() != binary
+        # A later OAuth refresh must survive rollback; never copy old credentials.
+        listener.write_text(listener.read_text().replace("synthetic-rotated", "synthetic-newer"))
+        protected[listener] = listener.read_bytes()
+    assert call("--rollback").returncode == 0
+    assert (old / "bin/xiaoai_bridge").read_bytes() == binary
+    assert (old / "config.json").read_bytes() == config_bytes
+    assert {p.name: p.read_bytes() for p in (old / "adapter").iterdir()} == adapter_bytes
+    for p, original in protected.items():
+        assert p.read_bytes() == original, p.name
+    assert (data / "xiaoai_boot.sh").read_text() == original_boot
+    assert cron.read_text() == original_cron and running.exists()
+
+
+@pytest.fixture
+def native_guard_installation(installation):
+    _, data, *_ = installation
+    package = data.parent / "package"
+    tools = data.parent / "tools"
+    for verb in ("show", "shut"):
+        executable(tools / f"{verb}-led", "exit 0")
+    installer = package / "install.sh"
+    installer.write_text(
+        installer.read_text()
+        .replace("/bin/show_led", str(tools / "show-led"))
+        .replace("/bin/shut_led", str(tools / "shut-led"))
+    )
+    for name in ("common.sh", "volume-recovery.sh", "voice-led.sh"):
+        shutil.copy2(ROOT / "speaker/lib" / name, package / "lib" / name)
+    source = (
+        (ROOT / "speaker/tools/activate_airplay_led.sh")
+        .read_text()
+        .replace("/data/", str(data) + "/")
+        .replace(
+            "/tmp/xiaoai_bridge.airplay-led.lock", str(data.parent / "runtime/airplay-led.lock")
+        )
+    )
+    executable(package / "tools/activate_airplay_led.sh", source)
+    start = package / "start.sh"
+    start.write_text(
+        start.read_text().replace("exit 1\nfi", 'rm "$INSTALL_FAIL_START"\n    exit 1\nfi')
+    )
+    hashes = [
+        hashlib.sha256(p.read_bytes()).hexdigest() + "  " + str(p.relative_to(package))
+        for p in package.rglob("*")
+        if p.is_file() and p.name not in {"SHA256SUMS", "config.json"}
+    ]
+    (package / "SHA256SUMS").write_text("\n".join(hashes) + "\n")
+    return installation
+
+
+@pytest.mark.parametrize("failure", [None, "guard_busy", "bridge_start"])
+def test_default_native_install_activates_reviewed_guard_and_restores_inactive_snapshot(
+    native_guard_installation, failure
+):
+    call, data, cron, original_cron, original_boot, calls = native_guard_installation
+    old = data / "xiaoai_bridge"
+    private_adapter(data, old / "adapter", led=True)
+    executable(old / "bin/xiaoai_bridge", "printf '0.1.6\\n'")
+    binary = (old / "bin/xiaoai_bridge").read_bytes()
+    config = '{"device_id":"synthetic-stable","token":"synthetic-stable","enable_listener_adapter":false}'
+    (old / "config.json").write_text(config)
+    original = (data / "airplay_volume_led").read_bytes()
+    candidate = (old / "adapter/airplay-led.sh").read_bytes()
+    if failure == "guard_busy":
+        (data.parent / "runtime/airplay_led.state").write_text("40 100\n")
+    elif failure == "bridge_start":
+        (data.parent / "fail-start").touch()
+    result = call("--apply")
+    assert (result.returncode == 0) is (failure is None), result.stdout + result.stderr
+    if failure is None:
+        assert (data / "airplay_volume_led").read_bytes() == candidate
+        assert (data / "airplay_volume_led.bak.xiaoai_bridge").read_bytes() == original
+    else:
+        assert (old / "bin/xiaoai_bridge").read_bytes() == binary
+        assert (data / "airplay_volume_led").read_bytes() == original
+    assert not (data / "xiaoai_bridge.backup/airplay_guard_active").exists()
+    assert call("--rollback").returncode == 0
+    assert (old / "bin/xiaoai_bridge").read_bytes() == binary
+    assert (old / "config.json").read_text() == config
+    assert (data / "airplay_volume_led").read_bytes() == original
+    assert (old / "adapter/airplay-led.sh").read_bytes() == candidate
+    assert cron.read_text() == original_cron
+    assert (data / "xiaoai_boot.sh").read_text() == original_boot
+
+
+@pytest.mark.parametrize("damage", ["missing_guard", "changed_source"])
+def test_unguarded_native_install_requires_review_before_any_changes(
+    native_guard_installation, damage
+):
+    call, data, cron, original_cron, original_boot, calls = native_guard_installation
+    old = data / "xiaoai_bridge"
+    private_adapter(data, old / "adapter", led=damage != "missing_guard")
+    if damage == "missing_guard":
+        shutil.copy2(ROOT / "tests/fixtures/lx06_airplay_led.sh", data / "airplay_volume_led")
+    else:
+        with (data / "airplay_volume_led").open("a") as stream:
+            stream.write("# independent update\n")
+    (old / "config.json").write_text('{"enable_listener_adapter":false}')
+    result = call("--apply")
+    assert result.returncode != 0 and "private" in result.stderr
+    assert not calls.exists() and not (data / "xiaoai_bridge.backup").exists()
+    assert cron.read_text() == original_cron
+    assert (data / "xiaoai_boot.sh").read_text() == original_boot
+
+
+def test_same_checked_package_reapplies_guard_removed_for_maintenance(native_guard_installation):
+    call, data, *_ = native_guard_installation
+    private_adapter(data, data.parent / "package/adapter", led=True)
+    original = (data / "airplay_volume_led").read_bytes()
+    assert call("--apply").returncode == 0
+    installed = data / "xiaoai_bridge"
+    config = (installed / "config.json").read_bytes()
+    candidate = (installed / "adapter/airplay-led.sh").read_bytes()
+    # Model a reviewed --remove during maintenance without changing its source.
+    shutil.copy2(data / "airplay_volume_led.bak.xiaoai_bridge", data / "airplay_volume_led")
+    assert (data / "airplay_volume_led").read_bytes() == original
+    result = call("--apply")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (data / "airplay_volume_led").read_bytes() == candidate
+    assert (installed / "config.json").read_bytes() == config
+
+
+@pytest.mark.parametrize("mode", ["--apply", "--rollback", "--uninstall"])
+@pytest.mark.parametrize("damage", ["missing", "guarded", "changed"])
+def test_active_guard_requires_recoverable_source_backup(native_guard_installation, mode, damage):
+    call, data, cron, original_cron, original_boot, calls = native_guard_installation
+    old = data / "xiaoai_bridge"
+    private_adapter(data, old / "adapter", led=True)
+    (old / "config.json").write_text('{"enable_listener_adapter":false,"token":"synthetic"}')
+    saved = data / "airplay_volume_led.bak.xiaoai_bridge"
+    shutil.copy2(data / "airplay_volume_led", saved)
+    shutil.copy2(old / "adapter/airplay-led.sh", data / "airplay_volume_led")
+    program = (data / "airplay_volume_led").read_bytes()
+    if damage == "missing":
+        saved.unlink()
+    elif damage == "guarded":
+        saved.write_bytes(program)
+    else:
+        saved.write_text(saved.read_text() + "# independently changed backup\n")
+    if mode == "--rollback":
+        backup = data / "xiaoai_bridge.backup"
+        backup.mkdir()
+        (backup / "status").write_text("installed\n")
+        (backup / "ready").touch()
+        (backup / "airplay_guard_active").touch()
+        shutil.copytree(old, backup / "bridge")
+    result = call(mode)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert old.is_dir() and (old / "adapter/airplay-led.sh").read_bytes() == program
+    assert (data / "airplay_volume_led").read_bytes() == program
+    assert cron.read_text() == original_cron
+    assert (data / "xiaoai_boot.sh").read_text() == original_boot
+    if mode == "--apply":
+        assert not calls.exists() and not (data / "xiaoai_bridge.backup").exists()
+
+
+@pytest.mark.parametrize("mode", ["--apply", "--remove"])
+@pytest.mark.parametrize("damage", ["missing", "guarded", "changed"])
+def test_standalone_guard_tool_checks_backup_before_idempotent_success(
+    native_guard_installation, speaker_shell, mode, damage
+):
+    _, data, *_ = native_guard_installation
+    old = data / "xiaoai_bridge"
+    private_adapter(data, old / "adapter", led=True)
+    shutil.copytree(data.parent / "package/lib", old / "lib")
+    saved = data / "airplay_volume_led.bak.xiaoai_bridge"
+    shutil.copy2(data / "airplay_volume_led", saved)
+    shutil.copy2(old / "adapter/airplay-led.sh", data / "airplay_volume_led")
+    program = (data / "airplay_volume_led").read_bytes()
+    if damage == "missing":
+        saved.unlink()
+    elif damage == "guarded":
+        saved.write_bytes(program)
+    else:
+        saved.write_text(saved.read_text() + "# independently changed backup\n")
+    env = {
+        **os.environ,
+        "PATH": str(data.parent / "tools") + os.pathsep + os.environ["PATH"],
+        "XIAOAI_BRIDGE_DIR": str(old),
+        "XIAOAI_BRIDGE_RUNTIME": str(data.parent / "runtime"),
+    }
+    tool = data.parent / "package/tools/activate_airplay_led.sh"
+    result = subprocess.run(
+        [*speaker_shell, str(tool), mode], env=env, capture_output=True, text=True, timeout=5
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert (data / "airplay_volume_led").read_bytes() == program
+    assert old.is_dir()
+
+
+def test_standalone_guard_valid_apply_remove_and_repeated_remove(
+    native_guard_installation, speaker_shell
+):
+    _, data, *_ = native_guard_installation
+    old = data / "xiaoai_bridge"
+    private_adapter(data, old / "adapter", led=True)
+    shutil.copytree(data.parent / "package/lib", old / "lib")
+    saved = data / "airplay_volume_led.bak.xiaoai_bridge"
+    shutil.copy2(data / "airplay_volume_led", saved)
+    original = saved.read_bytes()
+    shutil.copy2(old / "adapter/airplay-led.sh", data / "airplay_volume_led")
+    guarded = (data / "airplay_volume_led").read_bytes()
+    env = {
+        **os.environ,
+        "PATH": str(data.parent / "tools") + os.pathsep + os.environ["PATH"],
+        "XIAOAI_BRIDGE_DIR": str(old),
+        "XIAOAI_BRIDGE_RUNTIME": str(data.parent / "runtime"),
+    }
+    tool = data.parent / "package/tools/activate_airplay_led.sh"
+    for mode, expected in (("--apply", guarded), ("--remove", original), ("--remove", original)):
+        subprocess.run([*speaker_shell, str(tool), mode], env=env, check=True, timeout=5)
+        assert (data / "airplay_volume_led").read_bytes() == expected
+    saved.unlink()
+    subprocess.run([*speaker_shell, str(tool), "--remove"], env=env, check=True, timeout=5)
+    assert (data / "airplay_volume_led").read_bytes() == original
 
 
 def test_enabled_v013_snapshot_is_restored_after_new_listener_readiness_failure(installation):

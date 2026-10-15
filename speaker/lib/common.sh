@@ -50,10 +50,6 @@ bridge_json() { "$BRIDGE_JSON_BIN" --json-op "$@"; }
 config_value() { jq -r "$1" "$BRIDGE_CONFIG" 2>/dev/null; }
 flag() { [ "$(config_value "$1 // false")" = true ]; }
 request_value() { printf '%s' "$REQUEST" | jq -r "$1"; }
-bridge_valid_agent() {
-    case "$1" in conversation.*) agent_suffix=${1#conversation.} ;; *) return 1 ;; esac
-    case "$agent_suffix" in ''|*[!a-zA-Z0-9_]*) return 1 ;; esac
-}
 
 voice_busy() {
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice" ] || return 1

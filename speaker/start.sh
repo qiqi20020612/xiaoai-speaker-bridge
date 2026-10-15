@@ -36,6 +36,14 @@ startup_clock() {
         date +%s
     fi
 }
+# The API's detached caller holds its restart guard on stdin. Do not race an
+# installer, and never let the new daemon inherit this installation guard.
+if [ "${XIAOAI_BRIDGE_RESTART_API:-0}" = 1 ]; then
+    [ "$ACTION" = restart ] && [ "${XIAOAI_SKIP_LISTENER_START:-0}" = 1 ] || exit 2
+    exec 6> "$RUNTIME/xiaoai_bridge.install.lock"
+    flock -s -n 6 || { start_failure installation_in_progress 1;exit 1; }
+    . "$DIR/lib/common.sh"
+fi
 # Recovery can stop our process with a missing/broken config or binary.
 if [ "$ACTION" != stop ];then
     [ -x "$BIN" ] || { start_failure missing_binary 1;exit 1; }
@@ -62,6 +70,18 @@ owned_pid() {
 }
 
 stop_bridge() {
+    if [ "${XIAOAI_BRIDGE_RESTART_API:-0}" = 1 ]; then
+        # Recheck after the detached delay AND the start-lock wait. A wake can
+        # reserve ownership before acquiring audio, so test the marker as well.
+        exec 8> "$RUNTIME/xiaoai_bridge.audio.lock"
+        exec 7> "$RUNTIME/xiaoai_bridge.session.lock"
+        # Voice emits its snapshot before taking audio/session, but only after
+        # volume. Keep that existing gate through the event-socket handoff too.
+        exec 5> "$RUNTIME/xiaoai_bridge.volume.lock"
+        if ! flock -n 8 || ! flock -n 7 || ! flock -n 5 || voice_busy; then
+            start_failure restart_voice_busy 1;return 1
+        fi
+    fi
     owned_pid || { rm -f "$PIDFILE";return 0; }
     kill -TERM "$owner" || return 1
     count=0
@@ -86,7 +106,9 @@ if owned_pid; then
     start_diagnostic waiting_existing_process 0
 else
     start_diagnostic launching "$STARTUP_BUDGET"
-    "$BIN" 9>&- </dev/null >> "$LOG" 2>&1 &
+    ( [ "${XIAOAI_BRIDGE_RESTART_API:-0}" != 1 ] || exec 5>&- 7>&- 8>&-
+      exec 6>&- 9>&-
+      exec "$BIN" ) </dev/null >> "$LOG" 2>&1 &
     child=$!
     launched=true
 fi
@@ -100,6 +122,11 @@ while :;do
             if wait "$child";then result=0;else result=$?;fi
         fi
         start_failure process_exited "$result";exit 1
+    fi
+    if [ "${XIAOAI_BRIDGE_RESTART_API:-0}" = 1 ]; then
+        # Any authenticated health response means the event socket is bound.
+        # Release before the potentially slow device probe, not before launch.
+        case "$health" in 0|3|4|5) exec 5>&- 7>&- 8>&- ;; esac
     fi
     [ "$health" -ne 0 ] || break
     if [ "$health" -ne "$last_health" ];then
@@ -124,6 +151,9 @@ while :;do
     sleep 1
 done
 start_diagnostic ready 0
+if [ -r "$RUNTIME/xiaoai_bridge.feedback" ]; then
+    "$DIR/lib/task-feedback.sh" recover 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- >/dev/null 2>&1 || true
+fi
 if [ "${XIAOAI_SKIP_LISTENER_START:-0}" != 1 ] && jq -e '.enable_listener_adapter==true' "$CONFIG" >/dev/null 2>&1; then
     "$DIR/lib/listener-service.sh" start || { start_failure listener_adapter_failed 1;exit 1; }
 fi

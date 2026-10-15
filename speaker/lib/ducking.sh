@@ -2,8 +2,6 @@
 # Temporary mysoftvol attenuation only for an explicitly verified AirPlay route.
 # Sender volume/DBus and notifyvol are never modified here.
 BRIDGE_DUCK_ACTIVE=false
-BRIDGE_DUCK_SAVED=''
-BRIDGE_DUCK_REVISION=0
 bridge_duck_begin() {
     [ "$MODE" != voice ] && [ -n "$DUCK_VOLUME" ] && [ "$DUCK_VERIFIED" = true ] || return 0
     duck_snapshot=$("$BRIDGE_DIR/lib/source-snapshot.sh" 2>/dev/null) || return 0
@@ -14,14 +12,10 @@ bridge_duck_begin() {
     saved=$(percent mysoftvol)
     [ -n "$saved" ] || { flock -u 7;fail volume_unknown; }
     awk -v target="$DUCK_VOLUME" -v current="$saved" 'BEGIN {exit !(target<current)}' || { flock -u 7;return 0; }
-    rev=0
-    [ ! -r "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" ] || rev=$(bridge_json revision "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json")
     bridge_volume_journal "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" "{\"master\":$saved}" || { flock -u 7;fail state_write_failed; }
     duck_applied=$(bridge_json applied "$DUCK_VOLUME" < "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json") || { flock -u 7;fail state_write_failed; }
     printf '%s' "$duck_applied" | atomic_json "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" || { flock -u 7;fail state_write_failed; }
     bridge_mark_owner "$BRIDGE_RUNTIME/xiaoai_bridge.duck"
-    BRIDGE_DUCK_SAVED=$saved
-    BRIDGE_DUCK_REVISION=$rev
     BRIDGE_DUCK_ACTIVE=true
     amixer sset mysoftvol "${DUCK_VOLUME}%" >/dev/null 2>&1 || fail hardware_control_failed
     flock -u 7

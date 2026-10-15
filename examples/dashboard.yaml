@@ -1,23 +1,23 @@
-# Optional native HA UI. Add input_text helpers through HA; no external frontend.
-# The text helper is limited to 255 characters; the action itself supports 4096 bytes.
+# Optional native HA UI; replace all IDs with the retained registry Entity IDs.
+# Text entities submit directly (255 characters); services still accept 4096 bytes.
 type: vertical-stack
 cards:
   - type: media-control
     entity: media_player.your_speaker
   - type: entities
     entities:
-      - input_text.speaker_conversation
+      - text.your_speaker_play_text
+      - text.your_speaker_execute_text_directive
       - number.your_speaker_tts_volume
-      - select.your_speaker_idle_volume_policy
+      - number.your_speaker_bluetooth_volume
+      - number.your_speaker_master_volume
   - type: button
-    name: 对话并执行
-    icon: mdi:message-text
+    entity: button.your_speaker_restart_bridge
+    name: 重启桥接
     tap_action:
       action: perform-action
-      perform_action: script.speaker_send_text
-  - type: button
-    name: 仅朗读
-    icon: mdi:bullhorn
-    tap_action:
-      action: perform-action
-      perform_action: script.speaker_read_text
+      perform_action: button.press
+      target:
+        entity_id: button.your_speaker_restart_bridge
+      confirmation:
+        text: 仅重启 XiaoAI Bridge，继续吗？

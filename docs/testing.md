@@ -12,7 +12,8 @@ CI 使用 Python 3.14、Home Assistant 2026.10.0、官方 HA fixture 的 custom-
 | `test_client.py` | 分段 HTTP、回复上限、不确定 POST 标记 |
 | `test_bridge.py` | 本机真实 C HTTP 进程、认证、阶段状态、忙碌、幂等/冲突、输入/Unicode/HTTP 限制、Unix voice event、取消、多实例 |
 | `test_jobs.py` | 失去接收回应仅查询一次、队列优先级/取消、同活跃文字递归防护、多设备隔离 |
-| `test_text_pipeline.py` | 实际 shell + 真实 curl/本机 HTTP；服务端核对 Agent/Conversation ID、语音↔文字同缓存、滑动/过期、覆盖/无上下文、401 原续期与有界重试、失败不续期/不重复、silent reply、临时音量取消恢复 |
+| `test_text_pipeline.py` | 实际 shell + 真实 curl/本机 HTTP；服务端核对 Agent/Conversation ID、语音↔文字同缓存、滑动/过期、原默认 Agent/无上下文、401 原续期与有界重试、失败不续期/不重复、silent reply、临时音量取消恢复 |
+| `test_native_led.py` | 实际原生调用顺序；默认/旧配置、正常/失败/无回复、真实 C 取消/超时、灯锁/语音抢占/孤儿恢复、原 AirPlay Guard 避让与重放、无原生命令安全降级、旧 API/helper 删除、HA 灯环精确迁移 |
 | `test_boot.py` | 原 stop 先返回、进程随后退出；只 stop Squeezelite，done/失败重试 |
 | `test_busybox.py` | 实际 BusyBox 明确拒绝 `-w`；所有调用的参数契约、FD 生命周期、超时/释放/重试、并行临界区互斥 |
 | `test_install.py` | 真实安装器在合成文件系统上模拟启动失败、boot/Cron恢复、身份保持和重试、旧无标记备份/目录切换、缺配置/二进制的回滚/幂等卸载、升级失败、Cron/listener reload失败续跑、boot锁竞态、原配置值保留；包/已安装/retry 适配器格式和哈希校验、重复 LED/错误 hook 顺序拒绝、相同包不能绕过、活跃 LED 保护兼容检查 |
@@ -35,3 +36,5 @@ ARM CI 检验 ELF 头、无动态 INTERP、QEMU `--version`。这验证目标 AB
 只读调查核对了原调用链、原 boot/Cron、ABI、原服务、现有接口与状态。私有原始材料及可行性报告与公开源码分离；公开库不给出用户设备清单、地址或测量样本。
 
 完成设备部署后按 [覆盖矩阵](coverage.md) A1–E10 回归、按 [资源报告](resources.md) 采样，保留每项证据。发现硬件限制时先报告数据，不把 verification flag 当测试通过。
+
+0.1.7 精简专用门禁：`test_v017_simplification.py` 验证恰好 14 个实体、禁用/改名/跨条目迁移、原 ID 保留、raw dB 属性、单次音源决策、服务默认值、旧参数拒绝和原 EOAIC2 重置。`test_bridge_restart.py` 启动实际 C 与 start.sh，验证即时确认、重复点击、活动语音/任务拒绝、安装竞争、配置失败保留旧守护进程、不调用 Listener 以及锁未继承。原 LED 测试继续覆盖抢占、取消/超时/异常退出及 AirPlay 恢复。完整结果见对应 PR CI 和 JUnit。

@@ -46,7 +46,6 @@ def register_services(hass):
             if not coordinator.last_update_success and call.service not in (
                 "cancel_job",
                 "get_job",
-                "set_idle_volume_policy",
             ):
                 raise BridgeError("device_offline")
             if call.service in ("announce", "send_text"):
@@ -95,12 +94,6 @@ def register_services(hass):
                         raise BridgeError("volume_unknown")
                     delta = call.data["step"] * (1 if call.service == "volume_up" else -1)
                     await coordinator.volume.set(target, max(0, min(100, current + delta)))
-            elif call.service == "set_idle_volume_policy":
-                hass.config_entries.async_update_entry(
-                    coordinator.entry,
-                    options={**coordinator.entry.options, "idle_policy": call.data["policy"]},
-                )
-                result = {"policy": call.data["policy"]}
             elif call.service == "get_queue":
                 result = {"queue": await coordinator.mpd.queue()}
             elif call.service == "send_ir":
@@ -129,7 +122,6 @@ def register_services(hass):
             **text,
             vol.Optional("speak_response", default=True): bool,
             vol.Optional("use_context", default=True): bool,
-            vol.Optional("agent_id"): str,
         },
         "cancel_job": {**DEVICE, vol.Required("request_id"): str},
         "get_job": {**DEVICE, vol.Required("request_id"): str},
@@ -147,10 +139,6 @@ def register_services(hass):
             **DEVICE,
             vol.Optional("target", default="auto"): vol.In(TARGETS),
             vol.Optional("step", default=10): vol.All(vol.Coerce(float), vol.Range(min=1, max=100)),
-        },
-        "set_idle_volume_policy": {
-            **DEVICE,
-            vol.Required("policy"): vol.In(["master", "tts", "master_tts"]),
         },
         "get_queue": {**DEVICE},
         "send_ir": {

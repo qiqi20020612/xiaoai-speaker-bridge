@@ -39,11 +39,9 @@ class XiaoAICoordinator(DataUpdateCoordinator):
         self._sequence = 0
         self._closed = False
         self._synced_instance = None
-        self._synced_agent = None
 
     def _job_changed(self) -> None:
-        if self.data:
-            self.async_set_updated_data({**self.data, "job": self.jobs.last})
+        self.async_update_listeners()
 
     async def _async_setup(self) -> None:
         try:
@@ -78,7 +76,6 @@ class XiaoAICoordinator(DataUpdateCoordinator):
         decision = choose_source(state, priority)
         state["active_source"] = decision.source
         state["source_uncertain"] = decision.uncertain
-        state["job"] = self.jobs.last
         self.volume.state = state
         if "capabilities" in state:
             self.info["capabilities"] = state["capabilities"]
@@ -113,24 +110,6 @@ class XiaoAICoordinator(DataUpdateCoordinator):
                     changed.append({"target": target, "level": level})
             if changed:
                 await self.volume.commit(changed)
-        agent = self.entry.options.get("agent_id", "device_default")
-        if (
-            instance
-            and (instance, agent) != self._synced_agent
-            and self.volume.caps.get("conversation")
-        ):
-            try:
-                await self.client.request(
-                    "POST",
-                    "/api/conversation/agent",
-                    {
-                        "agent_id": None if agent == "device_default" else agent,
-                        "request_id": uuid.uuid4().hex,
-                    },
-                )
-                self._synced_agent = (instance, agent)
-            except BridgeError:
-                pass
         # Lightweight device snapshots only; HA retains policy and durable desired values.
         try:
             await self.client.request(
@@ -139,7 +118,6 @@ class XiaoAICoordinator(DataUpdateCoordinator):
                 {
                     "source": decision.source,
                     "uncertain": decision.uncertain,
-                    "idle_policy": self.volume.idle_policy,
                     "priority": list(priority),
                 },
             )

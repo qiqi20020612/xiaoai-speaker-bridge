@@ -2,11 +2,17 @@
 speaker_send_text:
   alias: 小爱文字对话
   mode: single
+  fields:
+    text:
+      required: true
+      selector:
+        text:
+          multiline: true
   sequence:
     - action: xiaoai_speaker.send_text
       data:
         entity_id: media_player.your_speaker
-        text: "{{ states('input_text.speaker_conversation') }}"
+        text: "{{ text }}"
         speak_response: true
         use_context: true
         wait: true
@@ -14,9 +20,15 @@ speaker_send_text:
 speaker_read_text:
   alias: 小爱仅朗读
   mode: single
+  fields:
+    text:
+      required: true
+      selector:
+        text:
+          multiline: true
   sequence:
     - action: xiaoai_speaker.announce
       data:
         entity_id: media_player.your_speaker
-        text: "{{ states('input_text.speaker_conversation') }}"
+        text: "{{ text }}"
         wait: true
