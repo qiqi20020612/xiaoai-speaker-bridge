@@ -106,7 +106,6 @@ if [ "$MODE" != announce ]; then
     . "$BRIDGE_DIR/lib/conversation.sh"
     bridge_load_conversation_adapter "$ORIGINAL_CURL" || fail conversation_adapter_missing
 fi
-bridge_feedback_setup
 bridge_feedback_begin
 [ -x "$TTS_PATH" ] || fail tts_unavailable
 bridge_profile config_ready

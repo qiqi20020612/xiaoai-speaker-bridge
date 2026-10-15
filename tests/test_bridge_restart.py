@@ -31,7 +31,7 @@ def post(endpoint, path="/api/bridge/restart", body=None):
 
 
 def test_repeated_restart_acknowledges_once_and_preserves_listener(endpoint_factory):
-    endpoint = endpoint_factory()
+    endpoint = endpoint_factory([{}, {"delay": 2}, {}])
     endpoint.values["enable_listener_adapter"] = True
     endpoint.config.write_text(json.dumps(endpoint.values))
     listener_calls = endpoint.root / "listener-calls"
@@ -50,7 +50,13 @@ def test_repeated_restart_acknowledges_once_and_preserves_listener(endpoint_fact
         endpoint, "/api/tts/announce", {"request_id": "pending-restart", "text": "hello"}
     ) == (503, {"error": "restart_in_progress"})
     endpoint.wait_for(lambda: endpoint.request("/api/state")[1].get("instance_id") != original, 10)
+    restarted = endpoint.request("/api/state")[1]["instance_id"]
+    # The new daemon has no parent restart_pid; the script still holds its guard
+    # until the first delayed probe completes, covering clicks across instances.
+    for _ in range(3):
+        assert post(endpoint) == (202, {"accepted": True})
     endpoint.wait_for(lambda: endpoint.request()[0] == 200, 5)
+    assert endpoint.request("/api/state")[1]["instance_id"] == restarted
     proc.wait(timeout=3)
     assert not listener_calls.exists()
     assert endpoint.logs().count("start event=launching") == 1

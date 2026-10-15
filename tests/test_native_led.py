@@ -151,7 +151,6 @@ def test_old_owner_cannot_end_or_reclaim_new_animation(native_led, speaker_shell
     body = f'''. "{path / "bridge/lib/common.sh"}"
 . "{path / "bridge/lib/task-feedback.sh"}"
 MODE=announce
-bridge_feedback_setup
 bridge_feedback_begin
 printf '%s different-start\\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.feedback"
 bridge_feedback_begin
@@ -171,7 +170,6 @@ def test_killed_owner_is_recovered_without_a_resident_worker(native_led, speaker
     body = f'''. "{path / "bridge/lib/common.sh"}"
 . "{path / "bridge/lib/task-feedback.sh"}"
 MODE=announce
-bridge_feedback_setup
 bridge_feedback_begin
 printf 'ready\\n'
 read hold
@@ -234,7 +232,6 @@ def test_original_airplay_guard_yields_and_replays_after_native_task(native_led,
     body = f'''. "{path / "bridge/lib/common.sh"}"
 . "{path / "bridge/lib/task-feedback.sh"}"
 MODE=announce
-bridge_feedback_setup
 bridge_feedback_begin
 printf '100 0\\n' > "$STATE_DIR/airplay_led.state"
 "{adapter}" --worker
@@ -259,7 +256,6 @@ def test_led_lock_failure_keeps_owner_for_later_recovery(native_led, speaker_she
     body = f'''. "{path / "bridge/lib/common.sh"}"
 . "{path / "bridge/lib/task-feedback.sh"}"
 MODE=announce
-bridge_feedback_setup
 bridge_feedback_begin
 printf 'ready\\n'
 read finish
@@ -299,7 +295,6 @@ def test_voice_reservation_before_led_lock_keeps_deferred_cleanup(native_led, sp
     body = f'''. "{path / "bridge/lib/common.sh"}"
 . "{path / "bridge/lib/task-feedback.sh"}"
 MODE=announce
-bridge_feedback_setup
 bridge_feedback_begin
 # A live voice owner has reserved priority but has not acquired the LED lock.
 printf '%s %s\\n' '{os.getpid()}' "$(bridge_pid_start '{os.getpid()}' 2>/dev/null || true)" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice"
@@ -389,7 +384,6 @@ def test_voice_preemption_defers_airplay_replay_until_voice_ends(
     task_body = f'''. "{path / "bridge/lib/common.sh"}"
 . "{path / "bridge/lib/task-feedback.sh"}"
 MODE=announce
-bridge_feedback_setup
 bridge_feedback_begin
 printf 'ready\\n'
 read finish

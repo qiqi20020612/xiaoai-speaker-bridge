@@ -1,13 +1,7 @@
 #!/bin/sh
 # Native Launcher sequence only; ownership uses the existing LED lock/marker.
 BRIDGE_FEEDBACK_OWNED=false
-BRIDGE_FEEDBACK_AVAILABLE=false
 BRIDGE_FEEDBACK_START=''
-bridge_feedback_setup() {
-    [ "$MODE" != voice ] && [ -x /bin/show_led ] && [ -x /bin/shut_led ] || return 0
-    BRIDGE_FEEDBACK_START=$(bridge_pid_start "$$" 2>/dev/null || true)
-    BRIDGE_FEEDBACK_AVAILABLE=true
-}
 
 bridge_feedback_restore_airplay() {
     voice_busy && return 0
@@ -44,7 +38,8 @@ bridge_feedback_finish_native() {
 
 bridge_feedback_begin() {
     [ "$BRIDGE_FEEDBACK_OWNED" = false ] || return 0
-    [ "$BRIDGE_FEEDBACK_AVAILABLE" = true ] && ! voice_busy || return 0
+    [ "$MODE" != voice ] && [ -x /bin/show_led ] && [ -x /bin/shut_led ] || return 0
+    voice_busy && return 0
     exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
     bridge_lock_for 0 6 || return 0
     if voice_busy; then flock -u 6;return 0;fi
@@ -52,6 +47,7 @@ bridge_feedback_begin() {
     if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" ]; then
         bridge_feedback_finish_native || { flock -u 6;return 0; }
     fi
+    BRIDGE_FEEDBACK_START=$(bridge_pid_start "$$" 2>/dev/null || true)
     bridge_mark_owner "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" || { flock -u 6;return 0; }
     BRIDGE_FEEDBACK_OWNED=true
     # Launcher: wake 1, loading 2, then 11/shut 1/2/3. Its show_led 3 is
