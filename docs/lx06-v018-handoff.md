@@ -47,7 +47,7 @@
 - C 端：[bridge.c](../speaker/src/bridge.c) 的 `server()` / `dispatch()` / `worker_spawn()` / `finish_worker()` / `read_local()`；JSON 与音频 trace helper 在 [json_ops.c](../speaker/src/json_ops.c)。
 - HA：[coordinator.py](../custom_components/xiaoai_speaker/coordinator.py)、[volume.py](../custom_components/xiaoai_speaker/volume.py)、[jobs.py](../custom_components/xiaoai_speaker/jobs.py)、[views.py](../custom_components/xiaoai_speaker/views.py)、[client.py](../custom_components/xiaoai_speaker/client.py)。
 
-`xiaoai_boot.sh` 沿用已有每分钟 Cron 和启动后 uptime 门限，首次 boot 序列保留已有 Squeezelite 停止逻辑；boot 完成后的重试只恢复 Bridge，不重复执行整套音频启动。不能把这个既有例外扩大成每次 Bridge 重启都可重启音频服务。`switch.listening` 沿用 Listener 启停，和只重启 Bridge 的按钮是两个不同能力。
+`xiaoai_boot.sh` 沿用已有每分钟 Cron 和启动后 uptime 门限，首次 boot 序列保留已有 Squeezelite 停止逻辑；boot 完成后的重试只恢复 Bridge，不重复执行整套音频启动。不能把这个既有例外扩大成每次 Bridge 重启都可重启音频服务。Listener 开关实体（key=`listener`）沿用 Listener 启停，和只重启 Bridge 的按钮是两个不同能力。
 
 ### 2.2 当前功能边界
 
