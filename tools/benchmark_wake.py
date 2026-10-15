@@ -62,6 +62,14 @@ def checkout(target, revision):
             dest.chmod(0o700)
 
 
+def resolve(revision):
+    if revision == "working-tree":
+        return revision
+    return subprocess.check_output(
+        ["git", "rev-parse", "--verify", f"{revision}^{{commit}}"], cwd=ROOT, text=True
+    ).strip()
+
+
 def prepare(root, revision):
     checkout(root, revision)
     speaker = root / "speaker"
@@ -261,12 +269,14 @@ def main():
         or not 0 <= args.warmup <= 3
     ):
         parser.error("Use 1..100 samples, 0..3 warmups and 0..0.6 seconds synthetic delay")
+    revisions = (resolve(args.baseline), resolve(args.candidate))
     report = {
         "evidence": "Controlled workstation simulation; NOT LX06 latency or CPU/RSS acceptance",
         "host": platform.platform(),
         "clock": "workstation monotonic file updated every 5ms",
         "baseline": args.baseline,
         "candidate": args.candidate,
+        "resolved_revisions": revisions,
         "query_delay_seconds": args.query_delay,
         "warmup_per_scenario_and_version": args.warmup,
         "excluded": "KWS/Guard, real LED/mixer/DBus/MPD, miplay, STT and providers; prompt is only the original 0.15s wait",
@@ -275,10 +285,7 @@ def main():
     }
     with tempfile.TemporaryDirectory(prefix="xiaoai-wake-") as directory:
         roots = [Path(directory) / str(i) for i in range(2)]
-        setup = [
-            prepare(root, ref)
-            for root, ref in zip(roots, (args.baseline, args.candidate), strict=True)
-        ]
+        setup = [prepare(root, ref) for root, ref in zip(roots, revisions, strict=True)]
         for scenario in args.scenarios:
             runs = [[], []]
             for _ in range(args.warmup):
