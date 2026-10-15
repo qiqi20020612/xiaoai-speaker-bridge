@@ -9,7 +9,7 @@ BRIDGE_JSON_BIN=${XIAOAI_BRIDGE_JSON_BIN:-$BRIDGE_BIN}
 . "${XIAOAI_BRIDGE_HELPER_DIR:-$BRIDGE_DIR/lib}/locks.sh"
 
 bridge_mark_owner() {
-    printf '%s %s\n' "$$" "$(bridge_pid_start "$$" 2>/dev/null || true)" > "$1"
+    printf '%s %s\n' "$$" "${2-$(bridge_pid_start "$$" 2>/dev/null || true)}" > "$1"
 }
 bridge_listener_pid() {
     bridge_owner_alive "$1" "${2:-}" || return 1
@@ -86,7 +86,11 @@ hooks_ready() {
 atomic_json() {
     json_target=$1
     json_tmp="$json_target.$$"
-    cat > "$json_tmp" || { rm -f "$json_tmp"; return 1; }
+    if [ "$#" -gt 1 ]; then
+        printf '%s' "$2" > "$json_tmp" || { rm -f "$json_tmp"; return 1; }
+    else
+        cat > "$json_tmp" || { rm -f "$json_tmp"; return 1; }
+    fi
     bridge_json validate < "$json_tmp" >/dev/null 2>&1 || { rm -f "$json_tmp"; return 1; }
     chmod 600 "$json_tmp"
     mv -f "$json_tmp" "$json_target"
@@ -98,16 +102,24 @@ dbus_get_all() {
         org.freedesktop.DBus.Properties.GetAll "string:$1" 2>/dev/null
 }
 
-# dbus-send's property output is parsed as text, never as executable shell.
+# Parse one property or an ordered pair as data, never executable shell.
+# Each requested field keeps its independent, first-match behavior.
 dbus_property() {
-    awk -v key="$1" '
-        $0 ~ "string \"" key "\"" { found=1; next }
-        found && /variant/ {
-            sub(/^.*variant[[:space:]]+/, "")
-            sub(/^(boolean|double|int32|int64|string)[[:space:]]+/, "")
-            sub(/^"/, ""); sub(/"$/, "")
-            print; exit
-        }'
+    awk -v first="$1" -v second="${2-}" '
+        BEGIN {key[1]=first;key[2]=second;count=(second=="" ? 1 : 2)}
+        {for(i=1;i<=count;i++) {
+            if(done[i])continue
+            if($0 ~ "string \"" key[i] "\""){found[i]=1;continue}
+            if(found[i] && /variant/) {
+                value=$0
+                sub(/^.*variant[[:space:]]+/, "", value)
+                sub(/^(boolean|double|int32|int64|string)[[:space:]]+/, "", value)
+                sub(/^"/, "", value);sub(/"$/, "", value)
+                result[i]=value;done[i]=1
+                if(++complete==count)exit
+            }
+        }}
+        END {for(i=1;i<=count;i++)if(count>1 || done[i])print result[i]}'
 }
 
 percent() {

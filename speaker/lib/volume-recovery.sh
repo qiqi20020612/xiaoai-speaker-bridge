@@ -6,13 +6,15 @@ bridge_volume_journal() {
     journal_path=$1
     journal_values=$2
     bridge_profile_detail journal_airplay_begin
-    journal_ap=$(dbus_get_all org.gnome.ShairportSync || true)
+    journal_ap=$(dbus_get_all org.gnome.ShairportSync) || journal_ap=''
     bridge_profile_detail journal_airplay_end
-    journal_raw=$(printf '%s' "$journal_ap" | dbus_property Volume)
-    journal_active=$(printf '%s' "$journal_ap" | dbus_property Active)
+    journal_ap_fields=$(printf '%s' "$journal_ap" | dbus_property Volume Active)
+    { IFS= read -r journal_raw;IFS= read -r journal_active || journal_active=''; } <<EOF
+$journal_ap_fields
+EOF
     journal_json=$(bridge_json journal "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" "${3:-}" "$journal_values" \
-        "$$" "$(bridge_pid_start "$$" 2>/dev/null || true)" "$journal_raw" "$journal_active" "${4:-null}") || return 1
-    printf '%s' "$journal_json" | atomic_json "$journal_path"
+        "$$" "${5-$(bridge_pid_start "$$" 2>/dev/null || true)}" "$journal_raw" "$journal_active" "${4:-null}") || return 1
+    atomic_json "$journal_path" "$journal_json"
 }
 
 # Called with FD 7 already held. Keep the journal on any error; remove it only
@@ -20,9 +22,11 @@ bridge_volume_journal() {
 bridge_volume_recover_locked() (
     recovery_file=$1
     [ -r "$recovery_file" ] || exit 0
-    recovery_ap=$(dbus_get_all org.gnome.ShairportSync || true)
-    recovery_raw=$(printf '%s' "$recovery_ap" | dbus_property Volume)
-    recovery_active=$(printf '%s' "$recovery_ap" | dbus_property Active)
+    recovery_ap=$(dbus_get_all org.gnome.ShairportSync) || recovery_ap=''
+    recovery_ap_fields=$(printf '%s' "$recovery_ap" | dbus_property Volume Active)
+    { IFS= read -r recovery_raw;IFS= read -r recovery_active || recovery_active=''; } <<EOF
+$recovery_ap_fields
+EOF
     recovery_master=$(percent mysoftvol)
     recovery_plan=$(bridge_json recovery-plan "$recovery_file" "$BRIDGE_RUNTIME/xiaoai_bridge.desired.json" \
         "$recovery_raw" "$recovery_active" "$recovery_master" 2>/dev/null) || exit 1
@@ -35,7 +39,7 @@ bridge_volume_recover_locked() (
         if ! amixer sset "$recovery_mixer" "${recovery_value}%" >/dev/null 2>&1; then recovery_failed=true;continue;fi
         if [ "${2:-}" != keep ]; then
             recovery_update=$(bridge_json drop-channel "$recovery_channel" < "$recovery_file") || exit 1
-            printf '%s' "$recovery_update" | atomic_json "$recovery_file" || exit 1
+            atomic_json "$recovery_file" "$recovery_update" || exit 1
         fi
       done
       [ "$recovery_failed" = false ]

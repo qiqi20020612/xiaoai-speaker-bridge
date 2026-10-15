@@ -3,9 +3,13 @@
 import io
 import json
 import os
+import socket
 import struct
 import subprocess
 import sys
+import tempfile
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -132,13 +136,13 @@ def test_first_pcm_requires_complete_frame_after_variable_split_headers(
         proc.stdin.write(frame[-1:])
         proc.stdin.flush()
         assert proc.stdout.read(1) == frame[-1:]
+        proc.stdin.close()
+        proc.wait(timeout=3)
         lines = trace.read_text().splitlines()
         assert len(lines) == 2
         assert "phase=recording_first_output" in lines[0]
         assert "phase=recording_first_pcm" in lines[1]
         assert all(line.endswith("cycle=42.99.1") for line in lines)
-        proc.stdin.close()
-        proc.wait(timeout=3)
         assert proc.returncode == 0 and proc.stderr.read() == b""
     finally:
         if proc.poll() is None:
@@ -264,5 +268,323 @@ def test_offline_wake_benchmark_uses_equal_routes_and_counts_queries():
             assert run["before_record_commands"]["dbus:airplay"] == 2
             assert run["before_record_commands"]["dbus:bluez"] == 1
             assert run["before_record_commands"]["mpd"] == 1
-            assert run["before_record_commands"]["sed"] == 3
             assert run["stages"]["wake->recording_launch"]["samples"] == 1
+        before = scenario["baseline"]["before_record_commands"]
+        after = scenario["candidate"]["before_record_commands"]
+        assert before["sed"] == 3 and after["sed"] == 1
+        assert before["awk"] == 10 and after["awk"] == 7
+        assert before["cat"] == 2 and after.get("cat", 0) == 0
+        for command in ("json:validate", "chmod", "mv", "amixer:get", "amixer:sset"):
+            assert before[command] == after[command]
+
+
+@pytest.mark.parametrize(
+    "data,expected",
+    [
+        (
+            'string "Volume"\nvariant double -18\nstring "Active"\nvariant boolean true\n',
+            ["-18", "true"],
+        ),
+        (
+            'string "Active"\nvariant boolean false\nstring "Volume"\nvariant double -6\n',
+            ["-6", "false"],
+        ),
+        ('string "Active"\nvariant boolean true\n', ["", "true"]),
+        ('string "Volume"\nvariant double -18\n', ["-18", ""]),
+        ('string "Volume"\nvariant string ""\n', ["", ""]),
+        ('string "Volume"\nvariant double -18\nstring "Volume"\nvariant double -6\n', ["-18", ""]),
+        ('string "Volume"\nstring "Active"\nvariant boolean true\n', ["true", "true"]),
+        ("unrecognized output\n", ["", ""]),
+    ],
+)
+def test_pair_parser_preserves_independent_first_matches(
+    text_device, speaker_shell, data, expected
+):
+    _, path, env = text_device
+    command = f'. "{path}/bridge/lib/common.sh"\ndbus_property Volume Active\n'
+    pair = subprocess.run(
+        [*speaker_shell, "-c", command],
+        input=data,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert pair.stdout.splitlines() == expected
+    for name, value in zip(("Volume", "Active"), expected, strict=True):
+        single = subprocess.run(
+            [*speaker_shell, "-c", f'. "{path}/bridge/lib/common.sh"\ndbus_property {name}\n'],
+            input=data,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert single.stdout.rstrip("\n") == value
+
+
+@pytest.mark.parametrize("stdin", [False, True])
+def test_atomic_json_keeps_validation_literal_bytes_and_original_on_failure(
+    text_device, speaker_shell, stdin
+):
+    _, path, env = text_device
+    target = path / "atomic.json"
+    content = json.dumps({"literal": "$(must_not_run) `must_not_run`\n你好"}, ensure_ascii=False)
+    command = f'. "{path}/bridge/lib/common.sh"\n' + (
+        'printf "%s" "$CONTENT" | atomic_json "$STATE_DIR/atomic.json"'
+        if stdin
+        else 'atomic_json "$STATE_DIR/atomic.json" "$CONTENT"'
+    )
+    for data, valid in ((content, True), ('{"duplicate":1,"duplicate":2}', False)):
+        result = subprocess.run(
+            [*speaker_shell, "-c", command],
+            env={**env, "CONTENT": data},
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert (result.returncode == 0) is valid
+        assert target.read_text() == content and target.stat().st_mode & 0o777 == 0o600
+        assert list(path.glob("atomic.json.*")) == []
+
+
+def test_live_voice_reuses_only_its_cycle_identity_and_standalone_callers_read_fresh(
+    text_device, speaker_shell
+):
+    _, path, env = text_device
+    body = f'''. "{path}/bridge/lib/listener-hooks.sh"
+bridge_pid_start() {{ printf 'read\\n' >> "$STATE_DIR/identity-reads";printf 999; }}
+bridge_voice_begin || exit 71
+cp "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" "$STATE_DIR/saved-journal"
+cp "$BRIDGE_RUNTIME/xiaoai_bridge.voice" "$STATE_DIR/saved-owner"
+[ "$(wc -l < "$STATE_DIR/identity-reads")" -eq 1 ] || exit 72
+bridge_mark_owner "$STATE_DIR/independent-owner"
+bridge_volume_journal "$STATE_DIR/independent-journal" '{{"tts":60}}' || exit 73
+[ "$(wc -l < "$STATE_DIR/identity-reads")" -eq 3 ] || exit 74
+bridge_restore_volume
+'''
+    result = subprocess.run(
+        [*speaker_shell, "-c", body], env=env, capture_output=True, text=True, timeout=8
+    )
+    assert result.returncode == 0, result.stderr
+    journal = json.loads((path / "saved-journal").read_text())
+    assert (path / "saved-owner").read_text().split() == [str(journal["owner"]), journal["start"]]
+    assert journal["start"] == "999"
+
+
+def test_airplay_transition_between_journal_and_snapshot_remains_observable(
+    text_device, speaker_shell
+):
+    _, path, env = text_device
+    script(
+        path / "tools/dbus-send",
+        """#!/bin/sh
+case "$*" in *org.bluez*) printf 'string "State"\\nvariant string "idle"\\n';exit 0;; esac
+n=0;[ ! -f "$STATE_DIR/ap-count" ] || read n < "$STATE_DIR/ap-count"
+n=$((n+1));printf '%s\\n' "$n" > "$STATE_DIR/ap-count"
+if [ "$n" = 1 ];then active=false;raw=-18;else active=true;raw=-6;fi
+printf 'string "Active"\\nvariant boolean %s\\nstring "Volume"\\nvariant double %s\\n' "$active" "$raw"
+""",
+    )
+    script(
+        path / "tools/fake-bridge",
+        """#!/bin/sh
+case "$1" in
+ --snapshot) printf '{"source":null,"uncertain":false}\\n';;
+ --mpd-state) printf stop;;
+ --emit) exit 0;;
+esac
+""",
+    )
+    body = f'''. "{path}/bridge/lib/listener-hooks.sh"
+bridge_voice_begin || exit 71
+cp "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" "$STATE_DIR/saved-journal"
+printf '%s' "$BRIDGE_VOICE_SNAPSHOT" > "$STATE_DIR/saved-snapshot"
+cp "$STATE_DIR/ap-count" "$STATE_DIR/pre-record-count"
+bridge_restore_volume
+'''
+    result = subprocess.run(
+        [*speaker_shell, "-c", body], env=env, capture_output=True, text=True, timeout=8
+    )
+    assert result.returncode == 0, result.stderr
+    journal = json.loads((path / "saved-journal").read_text())
+    snapshot = json.loads((path / "saved-snapshot").read_text())
+    assert journal["airplay_active"] == "false" and journal["airplay_raw"] == "-18"
+    assert snapshot["observed_sources"]["airplay"] is True
+    assert snapshot["active_sources"] == ["airplay"]
+    assert (path / "pre-record-count").read_text().strip() == "2"
+
+
+@pytest.mark.parametrize("failure", ["volume", "journal"])
+def test_unsafe_preparation_failure_never_attenuates_or_records(
+    text_device, speaker_shell, failure
+):
+    _, path, env = text_device
+    if failure == "volume":
+        script(path / "tools/amixer", "#!/bin/sh\nexit 1\n")
+    setup = (
+        'mkdir "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json.$$"'
+        if failure == "journal"
+        else ":"
+    )
+    body = f'''. "{path}/bridge/lib/listener-hooks.sh"
+{setup}
+if bridge_voice_begin; then printf unsafe > "$STATE_DIR/recorded";exit 71;fi
+[ ! -f "$BRIDGE_RUNTIME/xiaoai_bridge.voice" ] || exit 72
+'''
+    result = subprocess.run(
+        [*speaker_shell, "-c", body], env=env, capture_output=True, text=True, timeout=8
+    )
+    assert result.returncode == 0, result.stderr
+    assert not (path / "recorded").exists() and not (path / "mixer-writes").exists()
+
+
+@pytest.mark.parametrize("failure", ["policy", "airplay", "bluez", "mpd"])
+def test_failed_query_partial_output_is_unknown_not_confirmed_activity(
+    text_device, speaker_shell, failure
+):
+    _, path, env = text_device
+    script(
+        path / "tools/fake-bridge",
+        """#!/bin/sh
+case "$1" in
+ --snapshot)
+  printf '{"source":null,"uncertain":false}\\n'
+  [ "$FAIL_QUERY" != policy ];;
+ --mpd-state)
+  if [ "$FAIL_QUERY" = mpd ];then printf play;exit 1;fi
+  printf stop;;
+esac
+""",
+    )
+    script(
+        path / "tools/dbus-send",
+        """#!/bin/sh
+case "$*" in *--reply-timeout=600*) :;; *) exit 99;; esac
+case "$*" in *org.bluez*)
+ if [ "$FAIL_QUERY" = bluez ];then printf 'string "State"\\nvariant string "active"\\n';exit 1;fi
+ printf 'string "State"\\nvariant string "idle"\\n';;
+ *)
+ if [ "$FAIL_QUERY" = airplay ];then printf 'string "Active"\\nvariant boolean true\\n';exit 1;fi
+ printf 'string "Active"\\nvariant boolean false\\n';;
+esac
+""",
+    )
+    result = subprocess.run(
+        [*speaker_shell, str(path / "bridge/lib/source-snapshot.sh"), "42", "60", "60"],
+        env={**env, "FAIL_QUERY": failure},
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    snapshot = json.loads(result.stdout)
+    expected = {
+        name: None if name == failure else False for name in ("airplay", "bluetooth", "mpd")
+    }
+    if failure == "bluez":
+        expected["bluetooth"] = None
+    assert snapshot["observed_sources"] == expected
+    assert snapshot["active_sources"] == [] and snapshot["source"] is None
+    assert snapshot["uncertain"] is (failure != "policy")
+
+
+def test_failed_airplay_reply_cannot_become_journal_baseline(text_device, speaker_shell):
+    _, path, env = text_device
+    script(
+        path / "tools/dbus-send",
+        """#!/bin/sh
+printf 'string "Volume"\\nvariant double -6\\nstring "Active"\\nvariant boolean true\\n'
+exit 1
+""",
+    )
+    body = f'''. "{path}/bridge/lib/common.sh"
+bridge_volume_journal "$STATE_DIR/journal" '{{"master":60,"bluetooth":60}}'
+'''
+    result = subprocess.run(
+        [*speaker_shell, "-c", body], env=env, capture_output=True, text=True, timeout=5
+    )
+    assert result.returncode == 0, result.stderr
+    journal = json.loads((path / "journal").read_text())
+    assert journal["airplay_active"] == "" and journal["airplay_raw"] == ""
+
+
+@pytest.fixture(scope="module")
+def mpd_cli():
+    # Compile a public source copy against an isolated Unix socket. No access to
+    # /var/run/mpd.sock or any media action is possible through this fixture.
+    with tempfile.TemporaryDirectory(prefix="xsb-mpd-", dir="/tmp") as directory:
+        root = Path(directory)
+        path = root / "mpd.sock"
+        source = root / "bridge.c"
+        source.write_text(
+            (ROOT / "speaker/src/bridge.c").read_text().replace("/var/run/mpd.sock", str(path))
+        )
+        binary = root / "bridge"
+        subprocess.run(
+            [
+                "cc",
+                "-D_DEFAULT_SOURCE",
+                "-D_DARWIN_C_SOURCE",
+                "-std=c11",
+                "-Os",
+                "-I",
+                str(ROOT / "speaker/src"),
+                str(source),
+                str(ROOT / "speaker/src/json.c"),
+                str(ROOT / "speaker/src/json_ops.c"),
+                "-o",
+                str(binary),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run([str(binary), "--version"], check=True, capture_output=True)
+        config = root / "config.json"
+        config.write_text(json.dumps({"device_id": "synthetic", "token": "s" * 32}))
+        config.chmod(0o600)
+        yield binary, config, path
+
+
+@pytest.mark.parametrize(
+    "mode,expected", [("slow", "play"), ("timeout", "unknown"), ("ack", "unknown")]
+)
+def test_native_mpd_slow_response_and_read_timeout_are_bounded(mpd_cli, mode, expected):
+    binary, config, path = mpd_cli
+    path.unlink(missing_ok=True)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(str(path))
+        server.listen(1)
+        server.settimeout(4)
+        errors = []
+
+        def respond():
+            try:
+                connection, _ = server.accept()
+                with connection:
+                    if mode == "timeout":
+                        time.sleep(1.2)
+                        return
+                    time.sleep(0.03)
+                    connection.sendall(b"OK MPD 0.23.0\n")
+                    assert connection.recv(64) == b"status\n"
+                    time.sleep(0.03)
+                    connection.sendall(
+                        b"state: play\nOK\n" if mode == "slow" else b"ACK [5@0] {status} denied\n"
+                    )
+            except Exception as error:
+                errors.append(error)
+
+        worker = threading.Thread(target=respond)
+        worker.start()
+        try:
+            result = subprocess.run(
+                [str(binary), "--config", str(config), "--mpd-state"],
+                capture_output=True,
+                text=True,
+                timeout=4,
+            )
+        finally:
+            worker.join(timeout=4)
+        assert not worker.is_alive() and not errors
+        assert result.returncode == 0 and result.stdout.strip() == expected

@@ -31,7 +31,9 @@ bridge_voice_begin() {
     bridge_profile wake_setup_begin
     if ! voice_busy || [ "${voice_owner:-0}" != "$$" ]; then bridge_recover_pending || return 1;fi
     BRIDGE_VOICE_VOLUME_SAVED=false
-    bridge_mark_owner "$BRIDGE_RUNTIME/xiaoai_bridge.voice" || return 1
+    # This cycle already read our immutable starttime. Other owners still use
+    # fresh identity reads; no cross-cycle or foreign-process cache is added.
+    bridge_mark_owner "$BRIDGE_RUNTIME/xiaoai_bridge.voice" "${voice_cycle_start-}" || return 1
     trap 'bridge_voice_exit' HUP INT TERM
     printf '%s\n' "$XIAOAI_VOICE_CYCLE" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice-cycle" || { bridge_voice_release;return 1; }
     exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
@@ -69,7 +71,7 @@ bridge_voice_begin() {
     # One atomic commit: neither a failed write nor an unsuccessful audio
     # reservation may discard the remote duck's recoverable baseline.
     bridge_profile_detail wake_journal_begin
-    bridge_volume_journal "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" "$values" "$handoff" "$BRIDGE_HARDWARE_MASTER" || { flock -u 7;bridge_voice_release;return 1; }
+    bridge_volume_journal "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" "$values" "$handoff" "$BRIDGE_HARDWARE_MASTER" "${voice_cycle_start-}" || { flock -u 7;bridge_voice_release;return 1; }
     bridge_profile_detail wake_journal_end
     BRIDGE_VOICE_VOLUME_SAVED=true
     journal_fields=$(bridge_json journal-fields "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json") || {
@@ -107,7 +109,7 @@ bridge_voice_attenuate() {
     # lock. Keep the same two channels but finish both writes before recording.
     if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" ]; then
         applied_json=$(bridge_json applied "$1" < "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json") || { flock -u 7;return 1; }
-        printf '%s' "$applied_json" | atomic_json "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" || { flock -u 7;return 1; }
+        atomic_json "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" "$applied_json" || { flock -u 7;return 1; }
     fi
     amixer sset mysoftvol "${1}%" >/dev/null 2>&1 &&
         amixer sset bluetooth "${1}%" >/dev/null 2>&1
