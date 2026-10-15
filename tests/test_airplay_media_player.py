@@ -174,6 +174,12 @@ async def test_image_requests_share_fetch_expire_and_release_on_unload(hass, moc
                 == [(PNG, "image/png")] * 5
             )
             assert fetch.await_count == 1
+            same_cover = state()
+            same_cover["airplay"]["song"]["file"] = "/org/gnome/ShairportSync/456"
+            same_cover["airplay"]["song"]["title"] = "Another song, same cover"
+            await publish(hass, c, same_cover)
+            assert await player.async_get_media_image() == (PNG, "image/png")
+            assert fetch.await_count == 1
             clock.return_value += 299
             assert await player.async_get_media_image() == (PNG, "image/png")
             assert fetch.await_count == 1
