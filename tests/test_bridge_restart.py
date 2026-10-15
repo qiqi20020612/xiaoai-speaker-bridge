@@ -3,6 +3,8 @@
 import fcntl
 import http.client
 import json
+import os
+import subprocess
 import time
 
 import pytest
@@ -30,6 +32,15 @@ def post(endpoint, path="/api/bridge/restart", body=None):
         connection.close()
 
 
+def new_instance(endpoint, previous, *, ready=True):
+    status, state = endpoint.request("/api/state")
+    return (
+        status == 200
+        and state.get("instance_id") not in (None, "", previous)
+        and (not ready or not state.get("state_stale", True))
+    )
+
+
 def test_repeated_restart_acknowledges_once_and_preserves_listener(endpoint_factory):
     endpoint = endpoint_factory([{}, {"delay": 2}, {}])
     endpoint.values["enable_listener_adapter"] = True
@@ -49,7 +60,7 @@ def test_repeated_restart_acknowledges_once_and_preserves_listener(endpoint_fact
     assert post(
         endpoint, "/api/tts/announce", {"request_id": "pending-restart", "text": "hello"}
     ) == (503, {"error": "restart_in_progress"})
-    endpoint.wait_for(lambda: endpoint.request("/api/state")[1].get("instance_id") != original, 10)
+    endpoint.wait_for(lambda: new_instance(endpoint, original, ready=False), 10)
     restarted = endpoint.request("/api/state")[1]["instance_id"]
     # The new daemon has no parent restart_pid; the script still holds its guard
     # until the first delayed probe completes, covering clicks across instances.
@@ -64,7 +75,7 @@ def test_repeated_restart_acknowledges_once_and_preserves_listener(endpoint_fact
 
     # Neither short-lived guard may be inherited by the new daemon.
     def released():
-        for name in ("restart", "install"):
+        for name in ("restart", "install", "audio", "session"):
             with (endpoint.runtime / f"xiaoai_bridge.{name}.lock").open("a+") as lock:
                 try:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -100,6 +111,98 @@ def test_installation_starting_after_ack_prevents_restart_mutation(endpoint_fact
     assert "start event=launching" not in endpoint.logs()
 
 
+@pytest.mark.parametrize("late_owner", ["marker", "audio", "session", "waiting_for_start_lock"])
+def test_wake_after_restart_ack_aborts_handoff_and_keeps_source_tracking(
+    endpoint_factory, late_owner
+):
+    endpoint = endpoint_factory()
+    waiting = endpoint.root / "waiting-for-start-lock"
+    if late_owner == "waiting_for_start_lock":
+        # Instrument only the isolated copy to signal the exact wait boundary.
+        endpoint.start.write_text(
+            endpoint.start.read_text().replace(
+                "bridge_lock_for 5 9 ||", f"printf waiting > '{waiting}'\nbridge_lock_for 5 9 ||"
+            )
+        )
+    proc = endpoint.launch()
+    endpoint.wait_for(lambda: endpoint.request()[0] == 200)
+    original = endpoint.request("/api/state")[1]["instance_id"]
+    held = None
+    try:
+        if late_owner == "waiting_for_start_lock":
+            held = (endpoint.runtime / "xiaoai_bridge.start.lock").open("a+")
+            fcntl.flock(held, fcntl.LOCK_EX)
+        assert post(endpoint)[0] == 202
+        if late_owner == "waiting_for_start_lock":
+            # The caller has passed preflight and is waiting inside start.sh.
+            endpoint.wait_for(waiting.exists, 4)
+        if late_owner in ("marker", "waiting_for_start_lock"):
+            start = subprocess.check_output(
+                [
+                    *endpoint.shell,
+                    "-c",
+                    f'. "{endpoint.bridge}/lib/locks.sh"; bridge_pid_start {os.getpid()} || true',
+                ],
+                env=endpoint.env,
+                text=True,
+            ).strip()
+            (endpoint.runtime / "xiaoai_bridge.voice").write_text(f"{os.getpid()} {start}\n")
+            event = {
+                "type": "voice_begin",
+                "pid": os.getpid(),
+                "source": "airplay",
+                "active_sources": ["airplay"],
+                "uncertain": False,
+                "volumes": {"master": 60, "bluetooth": 40},
+                "observed_sources": {"airplay": True, "bluetooth": False, "mpd": False},
+            }
+            subprocess.run(
+                [str(endpoint.binary), "--emit", json.dumps(event)],
+                env=endpoint.env,
+                check=True,
+                timeout=2,
+            )
+            endpoint.wait_for(lambda: endpoint.request("/api/state")[1]["voice"]["active"])
+        else:
+            held = (endpoint.runtime / f"xiaoai_bridge.{late_owner}.lock").open("a+")
+            fcntl.flock(held, fcntl.LOCK_EX)
+        if late_owner == "waiting_for_start_lock":
+            fcntl.flock(held, fcntl.LOCK_UN)
+        endpoint.wait_for(lambda: "start event=restart_voice_busy" in endpoint.logs(), 4)
+        current = endpoint.request("/api/state")[1]
+        assert proc.poll() is None and current["instance_id"] == original
+        assert "start event=launching" not in endpoint.logs()
+        if late_owner in ("marker", "waiting_for_start_lock"):
+            assert current["voice"]["active"] and current["voice"]["source"] == "airplay"
+            assert current["voice"]["volumes"] == {"master": 60, "bluetooth": 40}
+        if late_owner == "marker":
+            (endpoint.runtime / "xiaoai_bridge.voice").unlink()
+            subprocess.run(
+                [str(endpoint.binary), "--emit", '{"type":"voice_end"}'],
+                env=endpoint.env,
+                check=True,
+                timeout=2,
+            )
+            endpoint.wait_for(lambda: post(endpoint, "/api/policy", {"source": None})[0] == 200)
+            assert post(endpoint)[0] == 202
+            endpoint.wait_for(lambda: new_instance(endpoint, original), 10)
+    finally:
+        if held is not None:
+            held.close()
+
+
+@pytest.mark.parametrize("marker", ["99999999 1\n", f"{os.getpid()} 0\n"])
+def test_stale_or_reused_voice_marker_does_not_block_idle_restart(endpoint_factory, marker):
+    endpoint = endpoint_factory()
+    endpoint.launch()
+    endpoint.wait_for(lambda: endpoint.request()[0] == 200)
+    original = endpoint.request("/api/state")[1]["instance_id"]
+    assert post(endpoint)[0] == 202
+    (endpoint.runtime / "xiaoai_bridge.voice").write_text(marker)
+    endpoint.wait_for(lambda: new_instance(endpoint, original), 10)
+    assert "start event=restart_voice_busy" not in endpoint.logs()
+
+
 def test_missing_restart_script_reports_immediate_failure(endpoint_factory):
     endpoint = endpoint_factory()
     proc = endpoint.launch()
@@ -128,13 +231,7 @@ def test_failed_config_check_leaves_old_daemon_running_and_allows_retry(endpoint
     # Reap the failed short-lived caller before the next acknowledged request.
     endpoint.wait_for(lambda: post(endpoint, "/api/policy", {"source": None})[0] == 200, 4)
     assert post(endpoint)[0] == 202
-    endpoint.wait_for(
-        lambda: (
-            endpoint.request()[0] == 200
-            and endpoint.request("/api/state")[1].get("instance_id") != original
-        ),
-        10,
-    )
+    endpoint.wait_for(lambda: new_instance(endpoint, original), 10)
 
 
 def test_restart_refuses_active_audio_job_and_retired_agent_api_is_absent(native_bridge):

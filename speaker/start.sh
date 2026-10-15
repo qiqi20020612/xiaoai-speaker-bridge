@@ -42,6 +42,7 @@ if [ "${XIAOAI_BRIDGE_RESTART_API:-0}" = 1 ]; then
     [ "$ACTION" = restart ] && [ "${XIAOAI_SKIP_LISTENER_START:-0}" = 1 ] || exit 2
     exec 6> "$RUNTIME/xiaoai_bridge.install.lock"
     flock -s -n 6 || { start_failure installation_in_progress 1;exit 1; }
+    . "$DIR/lib/common.sh"
 fi
 # Recovery can stop our process with a missing/broken config or binary.
 if [ "$ACTION" != stop ];then
@@ -69,6 +70,15 @@ owned_pid() {
 }
 
 stop_bridge() {
+    if [ "${XIAOAI_BRIDGE_RESTART_API:-0}" = 1 ]; then
+        # Recheck after the detached delay AND the start-lock wait. A wake can
+        # reserve ownership before acquiring audio, so test the marker as well.
+        exec 8> "$RUNTIME/xiaoai_bridge.audio.lock"
+        exec 7> "$RUNTIME/xiaoai_bridge.session.lock"
+        if ! flock -n 8 || ! flock -n 7 || voice_busy; then
+            start_failure restart_voice_busy 1;return 1
+        fi
+    fi
     owned_pid || { rm -f "$PIDFILE";return 0; }
     kill -TERM "$owner" || return 1
     count=0
@@ -86,6 +96,11 @@ case "$ACTION" in
     start) ;;
     *) exit 2 ;;
 esac
+if [ "${XIAOAI_BRIDGE_RESTART_API:-0}" = 1 ]; then
+    # The stop is committed; do not delay a later wake during startup probes or
+    # pass the gates to the new daemon. Voice keeps its original file ownership.
+    exec 7>&- 8>&-
+fi
 if owned_pid; then
     # A Cron/start retry can arrive while the same process is still probing.
     child=$owner
