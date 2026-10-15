@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import math
 import uuid
+from time import monotonic
 
 from homeassistant.components.media_player import MediaPlayerEntity, MediaPlayerEntityFeature
 from homeassistant.components.media_player.const import MediaPlayerState, MediaType
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
-from .client import BridgeError
+from .client import ARTWORK_ID, BridgeError
 from .entity import XiaoAIEntity
 
 
@@ -23,6 +27,18 @@ class XiaoAIMediaPlayer(XiaoAIEntity, MediaPlayerEntity):
     def __init__(self, coordinator):
         super().__init__(coordinator, "player")
         self._position_updated = dt_util.utcnow()
+        self._ap_track = None
+        self._ap_progress = None
+        self._ap_state = None
+        self._ap_position = None
+        self._ap_updated = None
+        self._ap_clock = None
+        self._image_key = None
+        self._image_data = (None, None)
+        self._image_until = 0
+        self._image_lock = asyncio.Lock()
+        self._image_closed = False
+        self._update_airplay_position()
 
     @property
     def source(self):
@@ -106,7 +122,8 @@ class XiaoAIMediaPlayer(XiaoAIEntity, MediaPlayerEntity):
         return self.coordinator.data.get(self._backend(), {}).get("muted")
 
     def _song(self):
-        return self.coordinator.data.get(self._backend(), {}).get("song", {})
+        song = self.coordinator.data.get(self._backend(), {}).get("song", {})
+        return song if isinstance(song, dict) else {}
 
     @property
     def media_title(self):
@@ -130,11 +147,14 @@ class XiaoAIMediaPlayer(XiaoAIEntity, MediaPlayerEntity):
         return MediaType.MUSIC
 
     def _status(self):
-        return self.coordinator.data.get(self._backend(), {}).get("status", {})
+        status = self.coordinator.data.get(self._backend(), {}).get("status", {})
+        return status if isinstance(status, dict) else {}
 
     @property
     def media_duration(self):
         value = self._status().get("duration") or self._song().get("duration")
+        if self._backend() == "airplay":
+            return self._seconds(value)
         try:
             return float(value) if value is not None else None
         except ValueError, TypeError:
@@ -142,6 +162,8 @@ class XiaoAIMediaPlayer(XiaoAIEntity, MediaPlayerEntity):
 
     @property
     def media_position(self):
+        if self._backend() == "airplay":
+            return self._ap_position
         value = self._status().get("elapsed")
         try:
             return float(value) if value is not None else None
@@ -150,7 +172,125 @@ class XiaoAIMediaPlayer(XiaoAIEntity, MediaPlayerEntity):
 
     @property
     def media_position_updated_at(self):
+        if self._backend() == "airplay":
+            return self._ap_updated
         return self._position_updated
+
+    @staticmethod
+    def _seconds(value):
+        try:
+            number = float(value)
+        except TypeError, ValueError, OverflowError:
+            return None
+        return (
+            number
+            if not isinstance(value, bool) and math.isfinite(number) and 0 <= number <= 604800
+            else None
+        )
+
+    def _update_airplay_position(self):
+        data = self.coordinator.data or {}
+        airplay = data.get("airplay", {})
+        playing = str(airplay.get("state", "")).lower()
+        song = airplay.get("song", {})
+        song = song if isinstance(song, dict) else {}
+        status = airplay.get("status", {})
+        status = status if isinstance(status, dict) else {}
+        artists = song.get("artist")
+        artists = (
+            tuple(artists)
+            if isinstance(artists, list) and all(isinstance(a, str) for a in artists)
+            else ()
+        )
+        raw = airplay.get("progress")
+        duration = self._seconds(status.get("duration"))
+        sample = self._seconds(status.get("elapsed"))
+        track = (
+            data.get("instance_id"),
+            song.get("file"),
+            song.get("title"),
+            song.get("album"),
+            artists,
+            duration,
+        )
+        now = monotonic()
+        stamp = dt_util.utcnow()
+        valid = (
+            self.source == "airplay"
+            and not data.get("state_stale")
+            and playing in ("playing", "paused")
+            and isinstance(raw, str)
+            and sample is not None
+        )
+        if not valid:
+            self._ap_position = self._ap_updated = self._ap_clock = None
+            return
+        elif track != self._ap_track or raw != self._ap_progress:
+            # Track metadata may arrive before its new RTP progress. Do not
+            # reuse the preceding track's still cached counter on that boundary.
+            if self._ap_track is not None and track != self._ap_track and raw == self._ap_progress:
+                self._ap_position = self._ap_updated = self._ap_clock = None
+            else:
+                self._ap_position = min(sample, duration) if duration is not None else sample
+                self._ap_updated, self._ap_clock = stamp, now
+        elif playing != self._ap_state and self._ap_position is not None:
+            if self._ap_state == "playing":
+                self._ap_position += max(0, now - self._ap_clock)
+                if duration is not None:
+                    self._ap_position = min(duration, self._ap_position)
+            self._ap_updated, self._ap_clock = stamp, now
+        self._ap_track, self._ap_progress, self._ap_state = track, raw, playing
+
+    def _current_image(self):
+        data = self.coordinator.data or {}
+        if (
+            self._image_closed
+            or not self.available
+            or self._backend() != "airplay"
+            or self.state not in (MediaPlayerState.PLAYING, MediaPlayerState.PAUSED)
+        ):
+            return None
+        image_id = data.get("airplay", {}).get("artwork_id")
+        if not isinstance(image_id, str) or not ARTWORK_ID.fullmatch(image_id):
+            return None
+        return data.get("instance_id"), image_id
+
+    @property
+    def media_image_hash(self):
+        key = self._current_image()
+        return hashlib.sha256(repr(key).encode()).hexdigest()[:32] if key else None
+
+    def _clear_image(self):
+        self._image_key = None
+        self._image_data = (None, None)
+        self._image_until = 0
+
+    async def async_get_media_image(self):
+        async with self._image_lock:
+            key = self._current_image()
+            if key is None:
+                self._clear_image()
+                return None, None
+            now = monotonic()
+            if key == self._image_key and now < self._image_until:
+                return self._image_data
+            self._clear_image()
+            try:
+                image = await self.coordinator.client.artwork(key[1])
+            except BridgeError:
+                image = None, None
+            if key != self._current_image():
+                return None, None
+            self._image_key, self._image_data = key, image
+            # One bounded image, no disk files or new timer. Existing updates
+            # expire it; short negative caching prevents repeated failed reads.
+            self._image_until = monotonic() + (300 if image[0] else 30)
+            return image
+
+    async def async_will_remove_from_hass(self):
+        self._image_closed = True
+        self._clear_image()
+        await super().async_will_remove_from_hass()
 
     @property
     def shuffle(self):
@@ -181,6 +321,9 @@ class XiaoAIMediaPlayer(XiaoAIEntity, MediaPlayerEntity):
 
     def _handle_coordinator_update(self):
         self._position_updated = dt_util.utcnow()
+        self._update_airplay_position()
+        if self._image_key != self._current_image() or monotonic() >= self._image_until:
+            self._clear_image()
         super()._handle_coordinator_update()
 
     async def _command(self, action, *args):

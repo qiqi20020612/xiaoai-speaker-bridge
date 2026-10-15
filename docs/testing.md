@@ -15,6 +15,7 @@ CI 使用 Python 3.14、Home Assistant 2026.10.0、官方 HA fixture 的 custom-
 | `test_text_pipeline.py` | 实际 shell + 真实 curl/本机 HTTP；服务端核对 Agent/Conversation ID、语音↔文字同缓存、滑动/过期、原默认 Agent/无上下文、401 原续期与有界重试、失败不续期/不重复、silent reply、临时音量取消恢复 |
 | `test_ducking.py` | 默认 AirPlay 避让、绝对目标与低音量保护、未知/多源跳过、静默文字不衰减、旧标记忽略、Journal/owner/mixer 失败、音量锁竞争、TERM/KILL 恢复、发送端/HA 新目标保护；原抢占/交接回归继续运行 |
 | `test_volume_probe.py` | 实际 Probe 在 DBus 期间跨越三类 Journal 恢复边界，HA 不导入旧临时音量；恢复后新音量可导入、锁忙不读取、读取时互斥、DBus 前释放锁、损坏 Journal 保留 |
+| `test_airplay_metadata.py` / `test_airplay_media_player.py` / `test_airplay_artwork_http.py` | 合成 4.3.5 typed reply、Unicode/畸形/超限、RTP 回绕、GetAll 复用、原 HA 播放器/图片代理、进度与切歌、缓存并发/过期/卸载、认证和路径/文件类型限制、真实 C 分段传输及慢客户端不阻塞语音事件 |
 | `test_native_led.py` | 实际原生调用顺序；默认/旧配置、正常/失败/无回复、真实 C 取消/超时、灯锁/语音抢占/孤儿恢复、原 AirPlay Guard 避让与重放、无原生命令安全降级、旧 API/helper 删除、HA 灯环精确迁移 |
 | `test_boot.py` | 原 stop 先返回、进程随后退出；只 stop Squeezelite，done/失败重试 |
 | `test_busybox.py` | 实际 BusyBox 明确拒绝 `-w`；所有调用的参数契约、FD 生命周期、超时/释放/重试、并行临界区互斥 |
@@ -30,6 +31,8 @@ CI 使用 Python 3.14、Home Assistant 2026.10.0、官方 HA fixture 的 custom-
 ARM CI 检验 ELF 头、无动态 INTERP、QEMU `--version`。这验证目标 ABI/程序入口，不验证扬声器、DBus 回控、发送端滑块、LED 或峰值资源。
 
 ## 未执行的真机验收
+
+AirPlay 元数据后续获得了用户明确的 SSH 只读授权，仅核对字段类型、默认封面目录及文件属性，并在工作站用实际回复验证新解析器。没有上传、部署或修改设备/真实 HA；真实歌曲和认证数据未保存到公开仓库。该格式验证不替代新版部署、切歌/进度/封面 UI 或资源验收，详见 [边界](airplay-metadata.md#验证与未验证项)。
 
 0.1.1 的 BusyBox 修复依据用户提供的设备环境和报错，本轮没有连接或修改任何音箱。用户报告 ARM CLI、校验和及旧版 dry run 通过、实际 apply 失败；CI 的真实 BusyBox 检查仍不是 LX06 硬件验收。
 

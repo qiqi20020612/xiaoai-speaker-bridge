@@ -35,7 +35,8 @@ probe() {
     exec 7>&-
     master=${master:-null}; tts=${tts:-null}; bt=${bt:-null}; headphone=${headphone:-null}
     ap=$(dbus_get_all org.gnome.ShairportSync || true)
-    apr=$(dbus_get_all org.gnome.ShairportSync.RemoteControl || true)
+    ap_remote_ok=true
+    apr=$(dbus_get_all org.gnome.ShairportSync.RemoteControl) || ap_remote_ok=false
     ap_active=$(printf '%s' "$ap" | dbus_property Active)
     ap_raw=$(printf '%s' "$ap" | dbus_property Volume)
     ap_available=$(printf '%s' "$apr" | dbus_property Available)
@@ -50,6 +51,15 @@ probe() {
     fi
     [ -n "$ap_state" ] || { [ "$ap_active" = true ] && ap_state=playing || ap_state=stopped; }
     [ "$ap_read" = true ] || ap_state=unknown
+    ap_media='{}'
+    # Reuse the existing reply, outside the volume lock and voice critical path.
+    # Stopped/failed replies may retain a previous song and are never displayed.
+    if [ "$ap_remote_ok" = true ] && [ "$ap_active" = true ]; then
+        case "$ap_state" in Playing|playing|Paused|paused)
+            ap_media=$(printf '%s' "$apr" | "$BRIDGE_JSON_BIN" --airplay-metadata) || ap_media='{}'
+            ;;
+        esac
+    fi
     bt_player=$(timeout 1 bluetoothctl player.show 2>/dev/null || true)
     bt_state=$(printf '%s' "$bt_player" | awk '/Status:/ {print $2;exit}')
     bt_name=$(printf '%s' "$bt_player" | sed -n 's/.*Name: //p' | head -n 1)
@@ -93,13 +103,14 @@ probe() {
         --argjson ap_read "$ap_read" --argjson bt_read "$bt_read" --argjson ap_available "$ap_available" \
         --argjson listener "$listener" --argjson hook "$hook" --argjson can_tts "$can_tts" --argjson can_conversation "$can_conversation" \
         --argjson ap_write "$airplay_write" --argjson ir "$ir" \
+        --argjson ap_media "$ap_media" \
         --argjson recovery_pending "$recovery_pending" \
         --argjson available "$available" --argjson load "$load" --argjson rss "$rss" \
         '{capabilities:{volume:{master:$write_master,tts:$has_tts,bluetooth:$write_bt,headphone:$has_headphone,airplay:$ap_write},volume_read:{master:$has_master,tts:$has_tts,bluetooth:$has_bt,headphone:$has_headphone,airplay:$ap_read},
           playback:{airplay:{read:$ap_read,actions:$ap_actions},bluetooth:{read:$bt_read,actions:$bt_actions}},
           announce:$can_tts,conversation:$can_conversation,voice_hooks:$hook,listener:true,infrared:$ir},
           state:{volume_recovery_pending:$recovery_pending,volumes:{master:$master,tts:$tts,bluetooth:$bt,headphone:$headphone,airplay:$ap_pct},
-          airplay:{active:$ap_active,available:$ap_available,state:$ap_state,raw_volume:$ap_raw,volume:$ap_pct,muted:$ap_muted},
+          airplay:({active:$ap_active,available:$ap_available,state:$ap_state,raw_volume:$ap_raw,volume:$ap_pct,muted:$ap_muted}+$ap_media),
           bluetooth:{active:$bt_active,state:$bt_state,connected_name:$bt_name},listener:{running:$listener},
           system:{memory_available:$available,cpu_load:$load,bridge_rss:$rss}}}'
 }

@@ -9,6 +9,7 @@
 | `GET /api/info` | 协议、设备 UUID、通用型号、软件版本、实际 capabilities；不返回密钥 |
 | `GET /api/state` | 更新时间、stale 标志、独立音量、真实 AirPlay/蓝牙状态、voice 来源快照、资源、instance ID |
 | `GET /api/playback` | 同一只读快照；MPD 全部业务状态由 HA 直连协议补齐 |
+| `GET /api/airplay/artwork/ID` | 认证后只读当前受限封面 ID；PNG/JPEG，最多 2 MiB；旧/缺失/不安全图片 404 |
 | `GET /api/health` | 首次成功 probe 后才 ready；未就绪时 HTTP 503 携带 `probe_status`、`probe_attempt`、`probe_running`、`startup_failed`，不回显配置 |
 | `GET /api/events?since=N` | 25 秒长轮询，返回单调 sequence；重启/较大旧游标产生 reset |
 | `POST /api/policy` | HA 当前来源/不确定状态的小快照，不在音箱运行 HA 规则引擎 |
@@ -26,6 +27,8 @@
 除 `/api/policy`、任务取消和 Bridge 重启外，控制请求都需要 `[A-Za-z0-9_-]{1,64}` request ID。同 ID、同接口及同请求体在最近 16 条记录窗口内返回已有状态；不同请求返回 `request_id_conflict`。音箱重启后记录消失，**不能把重发当跨重启 exactly-once**。HA 任务队列使用运行期语义摘要并在完成后清空 payload；两个原生文字实体独立保留最后一次成功提交的原文。
 
 ## 有界执行
+
+AirPlay 的可选 song/status/progress/artwork_id 由现有 Probe 的同一份 RemoteControl.GetAll 回复生成；不加入原生唤醒快照，不增加 D-Bus 查询。图片只按需分段读取，HA 每设备缓存一张并沿用现有更新清理。路径、类型、失效和进度精度见 [AirPlay 元数据](airplay-metadata.md)。
 
 - 8 个 HTTP 连接，3 个 worker 槽：一个低频 probe、一个快速控制、一个播报/对话。音箱无一般任务队列。
 - 文本最大 4096 UTF-8 字节，HTTP body 最大 12287 字节，header 最大约 4 KiB；回复任务结果最大 8191 字节，超出明确失败，不伪装成功。

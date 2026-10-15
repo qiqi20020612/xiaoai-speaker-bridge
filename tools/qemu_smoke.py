@@ -28,6 +28,33 @@ def main():
     with tempfile.TemporaryDirectory(prefix="xiaoai-qemu-") as directory:
         runtime = Path(directory)
         helper = [args.qemu, str(args.binary.resolve()), "--json-op"]
+        # Exact production parser on 32-bit ARM; values are wholly synthetic.
+        metadata = subprocess.check_output(
+            [args.qemu, str(args.binary.resolve()), "--airplay-metadata"],
+            input=b"""array [
+dict entry(
+ string "ProgressString"
+ variant string "4294957296/431000/7928000"
+)
+dict entry(
+ string "Metadata"
+ variant array [
+  dict entry(
+   string "xesam:title"
+   variant string "Synthetic ARM Song"
+  )
+  dict entry(
+   string "mpris:length"
+   variant int64 180000000
+  )
+ ]
+)
+]
+""",
+        )
+        metadata = json.loads(metadata)
+        assert metadata["song"]["title"] == "Synthetic ARM Song"
+        assert metadata["status"] == {"duration": 180, "elapsed": 10}
         quoted = subprocess.check_output(
             [*helper, "reply", 'synthetic "\\\n中文', '{"source":"mpd","uncertain":false}'],
             text=True,

@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include "airplay.h"
 #include "json.h"
 #include "json_ops.h"
 #include <arpa/inet.h>
@@ -45,6 +46,8 @@ struct config {
 } cfg;
 struct connection {
     int fd;
+    int image_fd;
+    size_t image_left;
     size_t used, sent, total;
     char input[BODY + 4096], output[OUTPUT + 512];
     double deadline;
@@ -79,6 +82,7 @@ static int voice_uncertain = 1, policy_uncertain = 1;
 static double next_probe = 0, last_airplay_check = 0;
 static time_t airplay_mtime = 0;
 static time_t cached_at = 0;
+static double cached_monotime = 0;
 static pid_t restart_pid = 0;
 static int probe_ok = 0;
 static unsigned probe_attempt = 0;
@@ -302,8 +306,10 @@ static int load_config(const char *path) {
 static void close_conn(int i) {
     if (conn[i].fd >= 0)
         close(conn[i].fd);
+    if (conn[i].image_fd >= 0)
+        close(conn[i].image_fd);
     memset(&conn[i], 0, sizeof conn[i]);
-    conn[i].fd = -1;
+    conn[i].fd = conn[i].image_fd = -1;
 }
 static void response(int i, int status, const char *body) {
     if (i < 0 || i >= CLIENTS || conn[i].fd < 0)
@@ -330,6 +336,39 @@ static void error(int i, int status, const char *code) {
     char out[128];
     snprintf(out, sizeof out, "{\"error\":\"%s\"}", code);
     response(i, status, out);
+}
+static void artwork_response(int i, const char *id) {
+    struct json_doc d;
+    char current[64];
+    if (!bridge_airplay_artwork_id(id) || !probe_ok ||
+        monotime() - cached_monotime > PROBE_INTERVAL + PROBE_TIMEOUT ||
+        json_parse(&d, cached_state, strlen(cached_state)) < 0) {
+        error(i, 404, "artwork_unavailable");
+        return;
+    }
+    int airplay = json_get(&d, 0, "airplay");
+    if (!json_bool(&d, json_get(&d, airplay, "active"), 0) ||
+        text(&d, airplay, "artwork_id", current, sizeof current) < 0 || strcmp(id, current)) {
+        error(i, 404, "artwork_unavailable");
+        return;
+    }
+    const char *mime;
+    size_t size;
+    int fd = bridge_airplay_artwork_open(AIRPLAY_ARTWORK_DIRECTORY, id, &size, &mime);
+    if (fd < 0) {
+        error(i, 404, "artwork_unavailable");
+        return;
+    }
+    int head = snprintf(conn[i].output, sizeof conn[i].output,
+                        "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %zu\r\n"
+                        "Connection: close\r\nCache-Control: no-store\r\n"
+                        "X-Content-Type-Options: nosniff\r\n\r\n",
+                        mime, size);
+    conn[i].image_fd = fd;
+    conn[i].image_left = size;
+    conn[i].total = (size_t)head;
+    conn[i].sent = 0;
+    conn[i].deadline = monotime() + 5;
 }
 static int job_find(const char *id) {
     for (int j = 0; j < HISTORY; j++)
@@ -412,9 +451,12 @@ static int worker_spawn(int kind, int owner, int job, const char *operation, con
         close(input[1]);
         close(output[0]);
         close(output[1]);
-        for (int i = 0; i < CLIENTS; i++)
+        for (int i = 0; i < CLIENTS; i++) {
             if (conn[i].fd >= 0)
                 close(conn[i].fd);
+            if (conn[i].image_fd >= 0)
+                close(conn[i].image_fd);
+        }
         if (listening >= 0)
             close(listening);
         if (local_socket >= 0)
@@ -589,6 +631,10 @@ static void dispatch(int i, char *method, char *path, char *body) {
     char out[OUTPUT];
     struct json_doc d;
     if (strcmp(method, "GET") == 0) {
+        if (strncmp(path, "/api/airplay/artwork/", 21) == 0) {
+            artwork_response(i, path + 21);
+            return;
+        }
         if (strcmp(path, "/api/health") == 0) {
             if (!cached_at) {
                 snprintf(out, sizeof out,
@@ -1007,6 +1053,7 @@ static void finish_worker(int k, int status) {
                 strcpy(capabilities, cap);
                 strcpy(cached_state, state);
                 cached_at = time(NULL);
+                cached_monotime = monotime();
                 probe_ok = 1;
                 probe_status = "ready";
                 startup_exhausted = 0;
@@ -1170,6 +1217,7 @@ static void accept_client(void) {
         if (conn[i].fd < 0) {
             memset(&conn[i], 0, sizeof conn[i]);
             conn[i].fd = fd;
+            conn[i].image_fd = -1;
             conn[i].identity = ++connection_identity;
             conn[i].deadline = monotime() + 5;
             nonblock(fd);
@@ -1185,7 +1233,7 @@ static int server(void) {
              (long)(monotime() * 1000000));
     rate_at = monotime();
     for (int i = 0; i < CLIENTS; i++)
-        conn[i].fd = -1;
+        conn[i].fd = conn[i].image_fd = -1;
     for (int k = 0; k < WORKERS; k++)
         workers[k].fd = -1;
     char pidfile[512];
@@ -1296,8 +1344,22 @@ static int server(void) {
                         close_conn(index);
                         continue;
                     }
-                    if (conn[index].sent == conn[index].total)
-                        close_conn(index);
+                    if (conn[index].sent == conn[index].total) {
+                        if (conn[index].image_fd >= 0 && conn[index].image_left) {
+                            size_t wanted = conn[index].image_left;
+                            if (wanted > OUTPUT)
+                                wanted = OUTPUT;
+                            ssize_t got = read(conn[index].image_fd, conn[index].output, wanted);
+                            if (got <= 0) {
+                                close_conn(index);
+                                continue;
+                            }
+                            conn[index].image_left -= (size_t)got;
+                            conn[index].total = (size_t)got;
+                            conn[index].sent = 0;
+                        } else
+                            close_conn(index);
+                    }
                 } else if (!conn[index].pending && !conn[index].events && (fds[k].revents & POLLIN))
                     http_read(index);
                 if (conn[index].fd >= 0 && (fds[k].revents & POLLHUP) && !conn[index].total)
@@ -1566,6 +1628,8 @@ static int mpd_state(void) {
     return 0;
 }
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--airplay-metadata") == 0)
+        return bridge_airplay_metadata();
     if (argc == 2 && strcmp(argv[1], "--version") == 0) {
         puts(VERSION);
         return 0;
