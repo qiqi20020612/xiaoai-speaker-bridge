@@ -59,14 +59,6 @@ def register_services(hass):
                     and not caps.get("announce")
                 ):
                     raise BridgeError("tts_unavailable")
-                if (
-                    caps.get("announcement_ducking", False)
-                    and coordinator.entry.options.get("announce_ducking")
-                    and (call.service == "announce" or payload.get("speak_response", True))
-                ):
-                    payload["duck_volume"] = coordinator.entry.options.get(
-                        "announce_duck_volume", 10
-                    )
                 job = await coordinator.jobs.submit(call.service, payload, call.context.id)
                 result = (
                     await coordinator.jobs.wait(job)

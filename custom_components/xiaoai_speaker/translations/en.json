@@ -48,8 +48,6 @@
         "title": "Volume and state options",
         "data": {
           "poll_interval": "Health poll interval (seconds)",
-          "announce_ducking": "Duck verified AirPlay background music during speech",
-          "announce_duck_volume": "Background music duck volume ceiling (%)",
           "source_priority_1": "Source priority 1",
           "source_priority_2": "Source priority 2",
           "source_priority_3": "Source priority 3"

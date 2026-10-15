@@ -56,6 +56,7 @@ async def test_upgrade_has_exactly_14_identities_and_preserves_all_retained_cust
         "idle_policy": "master_tts",
         "source_priority": ["mpd", "airplay", "bluetooth"],
         "announce_ducking": True,
+        "announce_duck_volume": 75,
     }
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -101,7 +102,9 @@ async def test_upgrade_has_exactly_14_identities_and_preserves_all_retained_cust
     assert dr.async_get(hass).async_get(device.id).identifiers == device.identifiers
     assert entry.data == DATA and entry.unique_id == "synthetic-speaker"
     assert entry.options == {
-        k: v for k, v in options.items() if k not in ("agent_id", "idle_policy")
+        k: v
+        for k, v in options.items()
+        if k not in ("agent_id", "idle_policy", "announce_ducking", "announce_duck_volume")
     }
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()

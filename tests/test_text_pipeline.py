@@ -675,10 +675,6 @@ else
 fi
 """,
     )
-    config = path / "config.json"
-    values = json.loads(config.read_text())
-    values["verified"] = {"announcement_ducking": True}
-    config.write_text(json.dumps(values))
     script(
         path / "tools/fake-bridge",
         """#!/bin/sh
@@ -694,23 +690,27 @@ esac
         """#!/bin/sh
 case "$*" in
  *org.bluez*) printf 'string "State"\\nvariant string "idle"\\n' ;;
- *) printf 'string "Active"\\nvariant boolean true\\n' ;;
+ *) printf 'string "Active"\\nvariant boolean true\\nstring "Volume"\\nvariant double -18\\n' ;;
 esac
 """,
     )
 
 
-@pytest.mark.parametrize("enabled", [False, True])
-def test_announce_duck_restores_master_independently_of_tts(text_device, enabled):
+@pytest.mark.parametrize("mode", ["announce", "send_text"])
+@pytest.mark.parametrize("legacy_level", [None, 0, 75])
+def test_automatic_duck_restores_master_independently_of_tts(text_device, mode, legacy_level):
     call, path, _ = text_device
     enable_airplay_duck_fixture(path)
-    result, _ = call("announce", "test", volume=45, **({"duck_volume": 10} if enabled else {}))
+    values = {"volume": 45} if mode == "announce" else {}
+    if legacy_level is not None:
+        values["duck_volume"] = legacy_level
+    result, _ = call(mode, "test", **values)
     assert result.returncode == 0
     writes = (path / "mixer-writes").read_text().splitlines()
     assert writes == (
         ["notifyvol 45%", "mysoftvol 10%", "notifyvol 60%", "mysoftvol 60%"]
-        if enabled
-        else ["notifyvol 45%", "notifyvol 60%"]
+        if mode == "announce"
+        else ["mysoftvol 10%", "mysoftvol 60%"]
     )
     assert not (path / "xiaoai_bridge.duck").exists()
     assert not (path / "xiaoai_bridge.duck.json").exists()
@@ -727,7 +727,7 @@ printf '{{"revision":2,"versions":{{"master":2}},"volumes":{{"master":45}}}}' > 
 exit {1 if fail else 0}
 """,
     )
-    result, _ = call("announce", "test", duck_volume=10)
+    result, _ = call("announce", "test")
     assert (result.returncode != 0) == fail
     assert (path / "mixer-writes").read_text().splitlines() == ["mysoftvol 10%", "mysoftvol 45%"]
     assert not (path / "xiaoai_bridge.duck.json").exists()
@@ -743,7 +743,7 @@ def test_duck_cancel_restores_and_deferred_ha_volume_is_not_applied_early(
             *speaker_shell,
             str(path / "bridge/lib/text.sh"),
             "announce",
-            json.dumps({"text": "test", "duck_volume": 10}),
+            json.dumps({"text": "test"}),
         ],
         env={**env, "TTS_SLEEP": "2"},
         stdout=subprocess.PIPE,
@@ -780,8 +780,6 @@ def test_duck_voice_handoff_preserves_pre_duck_value_in_both_orders(
     body = f'''. "{path / "bridge/lib/common.sh"}"
 . "{path / "bridge/lib/ducking.sh"}"
 MODE=announce
-DUCK_VOLUME=10
-DUCK_VERIFIED=true
 bridge_duck_begin
 {"volume_write master 45 >/dev/null" if new_target else ":"}
 printf '%s\\n' "$$" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice"

@@ -96,6 +96,7 @@ class XiaoAICoordinator(DataUpdateCoordinator):
             instance
             and not state.get("voice", {}).get("active")
             and not state.get("audio_active")
+            and not state.get("volume_recovery_pending")
             and not self.jobs.executing
             and not state.get("state_stale")
         ):

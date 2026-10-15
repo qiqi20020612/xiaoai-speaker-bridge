@@ -54,7 +54,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: XiaoAIConfigEntry) -> bool:
-    options = {k: v for k, v in entry.options.items() if k not in ("agent_id", "idle_policy")}
+    options = {
+        k: v
+        for k, v in entry.options.items()
+        if k not in ("agent_id", "idle_policy", "announce_ducking", "announce_duck_volume")
+    }
     if options != entry.options:
         hass.config_entries.async_update_entry(entry, options=options)
     session = async_get_clientsession(hass)

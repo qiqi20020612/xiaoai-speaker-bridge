@@ -11,6 +11,7 @@ case "$MODE" in voice|send_text|announce) ;; *) fail invalid_request ;; esac
 bridge_profile task_begin
 # Read every request field with one jq startup. The final field is the raw
 # multiline text; it is read as data, never evaluated as shell code.
+# Legacy numeric duck_volume is validated for older peers but no longer used.
 PARSED=$(printf '%s' "$REQUEST" | jq -r '
   if ((.text|type)=="string" and
   (if has("speak_response") then (.speak_response|type)=="boolean" else true end) and
@@ -25,13 +26,12 @@ PARSED=$(printf '%s' "$REQUEST" | jq -r '
   (.text|explode|index(0)|not)) then
   (if has("speak_response") then .speak_response else true end),
   (if has("use_context") then .use_context else true end),
-  (.volume // ""), (.duck_volume // ""), ((._snapshot // {})|tojson), .text
+  (.volume // ""), ((._snapshot // {})|tojson), .text
   else error("invalid_request") end' 2>/dev/null) || fail invalid_request
 {
     IFS= read -r SPEAK_RESPONSE
     IFS= read -r USE_CONTEXT
     IFS= read -r OVERRIDE
-    IFS= read -r DUCK_VOLUME
     IFS= read -r SNAPSHOT
     TEXT=$(cat)
 } <<EOF
@@ -84,12 +84,11 @@ if [ "$MODE" = voice ]; then bridge_lock_for 120 9 || fail busy; else flock -n 9
 bridge_profile session_ready
 if [ "$MODE" != voice ] && voice_busy; then fail busy; fi
 
-CONFIG_FIELDS=$(config_value '(.listener_config // "/data/listener"), (.tts_path // "/data/tts_doubao"), (.device_id // ""), (.verified.announcement_ducking // false), (.eoai_agent_script // "/data/eoai_agent.sh"), (.ha_auth_source // "/data/porcupine_launcher_kws")')
+CONFIG_FIELDS=$(config_value '(.listener_config // "/data/listener"), (.tts_path // "/data/tts_doubao"), (.device_id // ""), (.eoai_agent_script // "/data/eoai_agent.sh"), (.ha_auth_source // "/data/porcupine_launcher_kws")')
 {
     IFS= read -r LISTENER_CONFIG
     IFS= read -r TTS_PATH
     IFS= read -r DEVICE_ID
-    IFS= read -r DUCK_VERIFIED
     IFS= read -r BRIDGE_CONFIG_EOAI
     IFS= read -r BRIDGE_CONFIG_AUTH
 } <<EOF

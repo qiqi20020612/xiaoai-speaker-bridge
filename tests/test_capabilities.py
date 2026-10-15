@@ -211,28 +211,27 @@ async def test_native_text_privacy_is_explicit_and_recorder_filter_excludes_stat
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_ducking_options_are_applied_only_to_speaking_jobs(hass, mock_clients):
-    entry, c = await setup(hass, {"announce_ducking": True, "announce_duck_volume": 10})
-    c.info["capabilities"] = {**c.info["capabilities"], "announcement_ducking": True}
+@pytest.mark.parametrize("legacy_capability", [False, True])
+@pytest.mark.parametrize(
+    "kind,speak", [("announce", True), ("send_text", True), ("send_text", False)]
+)
+async def test_ducking_is_not_configured_or_forwarded_by_ha(
+    hass, mock_clients, legacy_capability, kind, speak
+):
+    entry, c = await setup(
+        hass, {"announce_ducking": True, "announce_duck_volume": 75, "poll_interval": 20}
+    )
+    c.info["capabilities"] = {**c.info["capabilities"], "announcement_ducking": legacy_capability}
     with patch.object(c.jobs, "submit", wraps=c.jobs.submit) as submit:
         await hass.services.async_call(
             DOMAIN,
-            "announce",
-            {"entity_id": "media_player.synthetic_speaker", "text": "test"},
-            blocking=True,
-        )
-        assert submit.call_args.args[1]["duck_volume"] == 10
-        await hass.services.async_call(
-            DOMAIN,
-            "send_text",
-            {
-                "entity_id": "media_player.synthetic_speaker",
-                "text": "silent",
-                "speak_response": False,
-            },
+            kind,
+            {"entity_id": "media_player.synthetic_speaker", "text": "test"}
+            | ({"speak_response": speak} if kind == "send_text" else {}),
             blocking=True,
         )
         assert "duck_volume" not in submit.call_args.args[1]
+    assert entry.options == {"poll_interval": 20}
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -247,6 +246,32 @@ async def test_pause_refresh_clears_active_airplay_source(hass, mock_clients):
         await c.async_refresh()
     assert c.data["active_source"] is None
     assert hass.states.get("media_player.synthetic_speaker").state == "idle"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_pending_volume_recovery_never_commits_temporary_duck_as_desired(hass, mock_clients):
+    entry, c = await setup(hass)
+    c._synced_instance = "same-instance"
+    c.volume.desired = dict(STATE["volumes"])
+    state = {
+        **STATE,
+        "instance_id": "same-instance",
+        "audio_active": False,
+        "volume_recovery_pending": True,
+        "volumes": {**STATE["volumes"], "master": 10},
+    }
+    with (
+        patch.object(c.client, "state", AsyncMock(return_value=state)),
+        patch.object(c.volume, "commit", wraps=c.volume.commit) as commit,
+    ):
+        await c.async_refresh()
+        commit.assert_not_called()
+        assert c.volume.desired == STATE["volumes"]
+        state["volume_recovery_pending"] = False
+        state["volumes"] = {**STATE["volumes"], "master": 45}
+        await c.async_refresh()
+        commit.assert_awaited_once_with([{"target": "master", "level": 45}])
+        assert c.volume.desired["master"] == 45
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 

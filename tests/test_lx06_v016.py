@@ -446,7 +446,7 @@ def test_wake_through_recorder_and_restore_uses_zero_jq_even_with_duck(
     )
     body = f'''. "{path / "bridge/lib/listener-hooks.sh"}"
 . "{path / "bridge/lib/ducking.sh"}"
-{"""MODE=announce;DUCK_VOLUME=10;DUCK_VERIFIED=true;bridge_duck_begin || exit 70""" if warm_duck else ":"}
+{"""MODE=announce;bridge_duck_begin || exit 70""" if warm_duck else ":"}
 cp "$STATE_DIR/tools/jq-forbidden" "$STATE_DIR/tools/jq"
 bridge_voice_begin || exit 71
 bridge_voice_attenuate 5 || exit 72

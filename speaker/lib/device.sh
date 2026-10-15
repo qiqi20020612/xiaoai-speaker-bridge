@@ -61,11 +61,8 @@ probe() {
     fi
     ir=false
     flag '.verified.infrared' && [ -w /sys/ir_tx_gpio/ir_data ] && ir=true
-    announcement_ducking=false
-    flag '.verified.announcement_ducking' && announcement_ducking=true
     recovery_pending=false
     bridge_has_pending_recovery && recovery_pending=true
-    [ "$recovery_pending" = false ] || announcement_ducking=false
     available=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
     read load rest < /proc/loadavg
     rss=null
@@ -82,12 +79,11 @@ probe() {
         --argjson ap_read "$ap_read" --argjson bt_read "$bt_read" --argjson ap_available "$ap_available" \
         --argjson listener "$listener" --argjson hook "$hook" --argjson can_tts "$can_tts" --argjson can_conversation "$can_conversation" \
         --argjson ap_write "$airplay_write" --argjson ir "$ir" \
-        --argjson announcement_ducking "$announcement_ducking" \
         --argjson recovery_pending "$recovery_pending" \
         --argjson available "$available" --argjson load "$load" --argjson rss "$rss" \
         '{capabilities:{volume:{master:$write_master,tts:$has_tts,bluetooth:$write_bt,headphone:$has_headphone,airplay:$ap_write},volume_read:{master:$has_master,tts:$has_tts,bluetooth:$has_bt,headphone:$has_headphone,airplay:$ap_read},
           playback:{airplay:{read:$ap_read,actions:$ap_actions},bluetooth:{read:$bt_read,actions:$bt_actions}},
-          announce:$can_tts,conversation:$can_conversation,voice_hooks:$hook,listener:true,infrared:$ir,announcement_ducking:$announcement_ducking},
+          announce:$can_tts,conversation:$can_conversation,voice_hooks:$hook,listener:true,infrared:$ir},
           state:{volume_recovery_pending:$recovery_pending,volumes:{master:$master,tts:$tts,bluetooth:$bt,headphone:$headphone,airplay:$ap_pct},
           airplay:{active:$ap_active,available:$ap_available,state:$ap_state,raw_volume:$ap_raw,volume:$ap_pct,muted:$ap_muted},
           bluetooth:{active:$bt_active,state:$bt_state,connected_name:$bt_name},listener:{running:$listener},
