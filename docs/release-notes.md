@@ -12,4 +12,4 @@
 
 离线结果只验证调用数量、输出等价和受控阶段；没有 v0.1.7/v0.1.8 LX06 性能、CPU/RSS 或首字完整性结论。完整测量条件、证据和真机清单见 [v0.1.8 说明](https://github.com/qiqi20020612/xiaoai-speaker-bridge/blob/337fb4588168be15496b967ace6de01bf8173cc6/docs/lx06-v018.md)，包内说明也使用这一固定链接。
 
-后续另获部署授权后，校验同一完整包内外 SHA256，沿用原地升级，不卸载重配。失败保留恢复目录：failed_restored 表示自动恢复；recovery_required 用同一新包 install.sh --rollback 继续恢复。主动回退也由新包恢复 v0.1.7 快照，保留 UUID/Token、私有适配器、启用状态、有效历史备份和最新 OAuth，不回写旧认证整份备份。本轮未实机安装或回滚。
+后续另获部署授权后，取得同一构建的 LX06 ARM 包、HA ZIP、RELEASE_NOTES.md 与 SHA256SUMS，执行 sha256sum --check SHA256SUMS（macOS 使用 shasum -a 256 -c SHA256SUMS），再核验音箱包内清单。校验通过后沿用原地升级，不卸载重配。失败保留恢复目录：failed_restored 表示自动恢复；recovery_required 用同一新包 install.sh --rollback 继续恢复。主动回退也由新包恢复 v0.1.7 快照，保留 UUID/Token、私有适配器、启用状态、有效历史备份和最新 OAuth，不回写旧认证整份备份。本轮未实机安装或回滚。
