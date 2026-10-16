@@ -322,8 +322,9 @@ def test_cancel_keeps_deferred_volume_recovery_outside_stopped_group(task_bridge
 
 @pytest.mark.parametrize("task_bridge", [30], indirect=True)
 @pytest.mark.parametrize("kind", ["announce", "send_text"])
+@pytest.mark.parametrize("hold_recovery_unlock", [False, True])
 def test_cancel_while_decoder_waits_for_volume_lock_cannot_start_late_playback(
-    task_bridge, native_led, ha_http, silent_player, kind
+    task_bridge, native_led, ha_http, silent_player, kind, hold_recovery_unlock, request
 ):
     call, runtime = task_bridge
     _, path, _ = native_led
@@ -342,6 +343,19 @@ def test_cancel_while_decoder_waits_for_volume_lock_cannot_start_late_playback(
     )
     endpoint = "/api/tts/announce" if kind == "announce" else "/api/conversation/text"
     request_id = "cancel-preplay-gate"
+    if hold_recovery_unlock:
+        request.addfinalizer(lambda: (path / "recovery-unlock-released").touch())
+        recovery = path / "bridge/lib/volume-recovery.sh"
+        recovery.write_text(
+            recovery.read_text().replace(
+                '[ "${2:-}" = keep ] || rm -f "$recovery_file"',
+                """[ "${2:-}" = keep ] || rm -f "$recovery_file"
+    if [ "$recovery_file" = "$BRIDGE_RUNTIME/xiaoai_bridge.tts-volume.json" ]; then
+        : > "$STATE_DIR/recovery-journal-removed"
+        while [ ! -f "$STATE_DIR/recovery-unlock-released" ]; do sleep 0.01;done
+    fi""",
+            )
+        )
     assert call(endpoint, {"request_id": request_id, "text": "synthetic", "volume": 20})[0] == 202
     wait_for(lambda: (path / "synthesis.pid").exists())
     with (runtime / "xiaoai_bridge.volume.lock").open("a+") as lock:
@@ -353,14 +367,34 @@ def test_cancel_while_decoder_waits_for_volume_lock_cannot_start_late_playback(
         wait_for(lambda: not call("/api/state")[1]["audio_active"], timeout=15)
         assert not (runtime / "xiaoai_bridge.duck.json").exists()
     wait_for(lambda: not (runtime / "xiaoai_bridge.tts-volume.json").exists(), timeout=8)
+    if hold_recovery_unlock:
+        try:
+            wait_for(lambda: (path / "recovery-journal-removed").exists())
+            # Removing the Journal precedes the recovery subprocess's return
+            # and FD close; it does not promise the Volume Lock is free yet.
+            with (runtime / "xiaoai_bridge.volume.lock").open("a+") as lock:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            (path / "recovery-unlock-released").touch()
+
+    def locks_released():
+        for name in ("audio", "volume", "session", "led"):
+            with (runtime / f"xiaoai_bridge.{name}.lock").open("a+") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return False
+        return True
+
+    # Verify actual lock availability within the same bounded cleanup window,
+    # rather than using Journal absence as a proxy for a completed FD close.
+    wait_for(locks_released, timeout=8)
     assert not (path / "played").exists()
     assert (path / "mixer-notifyvol").read_text().strip() == "60"
     assert not any(
         line.startswith("mysoftvol ") for line in (path / "mixer-writes").read_text().splitlines()
     )
-    for name in ("audio", "volume", "session", "led"):
-        with (runtime / f"xiaoai_bridge.{name}.lock").open("w") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     assert (
         call(endpoint, {"request_id": request_id, "text": "synthetic", "volume": 20})[1]["status"]
         == "cancelled"
