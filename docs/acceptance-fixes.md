@@ -37,9 +37,9 @@ HA 不再显示避让开关和上限，加载配置条目时只清理 announce_d
 
 ## 文本输入隐私
 
-原生 text 操作仅用于非敏感内容，最多 255 个字符，这是 HA State Machine 的限制；较长文本仍使用原服务（4096 字节）。「播放文字」提交即调用 `xiaoai_speaker.announce`，「执行文字指令」提交即调用 `xiaoai_speaker.send_text`，不需要独立发送按钮。成功入队后各自保留完整原文，下一次成功提交时更新；提交失败不覆盖原状态，任务结束后可以再次提交相同文字。后续任务失败仍保留已提交文字，由原有 status/error 属性反馈；空白、NUL 和超长输入继续拒绝。快捷文字对话使用原服务 speak_response=true、use_context=true 默认值；两个独立开关和其内存状态已删除。交互参考 [Xiaomi Miot 的 TextEntity 动作设计](https://github.com/al-one/hass-xiaomi-miot/blob/master/custom_components/xiaomi_miot/text.py)，执行仍通过本集成原有服务与队列。
+原生 text 操作仅用于非敏感内容，最多 255 个字符，这是 HA State Machine 的限制；较长文本仍使用原服务（4096 字节）。「播放文字」提交即调用 `xiaoai_speaker.announce`，「执行文字指令」提交即调用 `xiaoai_speaker.send_text`，不需要独立发送按钮。v0.1.9 起成功入队后自动清空，通过 HA 原生 `logbook.log` 将完整原文关联到对应实体；记录表示成功提交，不表示音箱任务已经完成。提交失败不写 Logbook，并在现有内存输入字段中保留未入队的有效文字；正在提交或仍有未完成任务时继续拒绝重复发送。任务结束后可以再次提交相同文字，每次成功提交单独记录。后续任务失败仍由原有 status/error/request_id 属性反馈，不另写一次提交记录；空白、NUL 和超长输入继续拒绝。快捷文字对话使用原服务 speak_response=true、use_context=true 默认值；两个独立开关和其内存状态已删除。
 
-实体在当前集成运行期间保留最后一次成功提交的原文；提交值经过 HA 服务，可能进入服务事件、自动化、日志和历史。输入使用 Password 模式也不能把这些渠道变成安全存储。集成诊断不导出输入、回复或 token。
+Logbook 使用实际 Entity ID（含用户改名）、实体名称和原服务上下文，message 保留空白、换行和完整原文。由 HA 原生 Recorder/Logbook 持久化、过滤和清理，集成不另建历史数据库或保留已提交文本。Logbook 未启用时不强制启动 Recorder/Logbook；写入服务异常仅记录不含原文的警告，不把已经入队的任务误报失败或重新提交。提交值及未入队的输入状态也可能进入 HA 服务事件、自动化、日志和历史；输入使用 Password 模式不能把这些渠道变成安全存储。集成诊断不导出输入、回复或 token。
 
 在输入前配置 Recorder 排除**实际的两个 text Entity ID**，例如：
 
@@ -51,7 +51,7 @@ recorder:
       - text.your_speaker_execute_text_directive
 ```
 
-排除状态不能保证服务事件、日志、外部自动化或已有历史均无文本。敏感任务应关闭/不使用这些输入，并按自己的 HA 数据保留策略处理已有历史。更长/敏感输入使用原服务也不获得“不留痕”保证。
+Recorder 按实际 Entity ID 排除时，也会过滤关联的 Logbook 条目；仅使用 Logbook 展示过滤不等于阻止 Recorder 入库，实体定向查询遵循 HA 原生规则。排除实体不能保证服务事件、日志、外部自动化或已有历史均无文本。敏感任务应关闭/不使用这些输入，并按自己的 HA 数据保留策略处理已有历史。更长/敏感输入使用原服务也不获得“不留痕”保证。
 
 ## 实体迁移
 

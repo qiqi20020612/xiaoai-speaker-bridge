@@ -1,6 +1,9 @@
 {
   "domain": "xiaoai_speaker",
   "name": "XiaoAI Speaker Bridge",
+  "after_dependencies": [
+    "logbook"
+  ],
   "codeowners": [
     "@qiqi20020612"
   ],
