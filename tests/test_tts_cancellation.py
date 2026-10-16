@@ -148,12 +148,12 @@ def install_providers(path, provider, player, ha_url):
     config = json.loads((path / "config.json").read_text())
     config["tts_path"] = str(data / "tts_doubao")
     (path / "config.json").write_text(json.dumps(config))
-    for name in ("miplay", "mpg123"):
-        script(
-            path / "tools" / name,
-            f'#!/bin/sh\nprintf \'%s\\n\' "$$" > "$STATE_DIR/player.pid"\n'
-            f': > "$STATE_DIR/played"\nexec "{player}"\n',
-        )
+    script(path / "tools/miplay", '#!/bin/sh\nexec mpg123 -q -a notify "$1"\n')
+    script(
+        path / "tools/mpg123",
+        f'#!/bin/sh\nprintf \'%s\\n\' "$$" > "$STATE_DIR/player.pid"\n'
+        f': > "$STATE_DIR/played"\nexec "{player}" "$@"\n',
+    )
     script(
         path / "tools/ffmpeg",
         '#!/bin/sh\nfor output; do :;done\ncat >/dev/null\nprintf synthetic-mp3 > "$output"\n',
@@ -296,7 +296,8 @@ def test_cancel_keeps_deferred_volume_recovery_outside_stopped_group(task_bridge
     call, runtime = task_bridge
     _, path, _ = native_led
     enable_airplay_duck_fixture(path)
-    script(path / "existing-tts", '#!/bin/sh\n: > "$STATE_DIR/tts-started"\nsleep 30\n')
+    script(path / "existing-tts", "#!/bin/sh\nmpg123\n")
+    script(path / "tools/mpg123", '#!/bin/sh\n: > "$STATE_DIR/tts-started"\nsleep 30\n')
     assert (
         call(
             "/api/tts/announce",
@@ -317,6 +318,53 @@ def test_cancel_keeps_deferred_volume_recovery_outside_stopped_group(task_bridge
     wait_for(lambda: not (runtime / "xiaoai_bridge.duck.json").exists(), timeout=8)
     assert (path / "mixer-mysoftvol").read_text().strip() == "60"
     assert (path / "mixer-notifyvol").read_text().strip() == "60"
+
+
+@pytest.mark.parametrize("task_bridge", [30], indirect=True)
+@pytest.mark.parametrize("kind", ["announce", "send_text"])
+def test_cancel_while_decoder_waits_for_volume_lock_cannot_start_late_playback(
+    task_bridge, native_led, ha_http, silent_player, kind
+):
+    call, runtime = task_bridge
+    _, path, _ = native_led
+    enable_airplay_duck_fixture(path)
+    tts_path = install_providers(path, "doubao", silent_player, ha_http.url)
+    values = json.loads((runtime / "config.json").read_text())
+    values["tts_path"] = str(tts_path)
+    (runtime / "config.json").write_text(json.dumps(values))
+    dbus = path / "tools/dbus-send"
+    dbus.write_text(
+        dbus.read_text().replace(
+            "#!/bin/sh\n",
+            '#!/bin/sh\n[ -z "${XIAOAI_TTS_GATE:-}" ] || : > "$STATE_DIR/preplay-ready"\n',
+            1,
+        )
+    )
+    endpoint = "/api/tts/announce" if kind == "announce" else "/api/conversation/text"
+    request_id = "cancel-preplay-gate"
+    assert call(endpoint, {"request_id": request_id, "text": "synthetic", "volume": 20})[0] == 202
+    wait_for(lambda: (path / "synthesis.pid").exists())
+    with (runtime / "xiaoai_bridge.volume.lock").open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        (path / "synthesis-released").touch()
+        wait_for(lambda: (path / "preplay-ready").exists())
+        assert not (path / "played").exists()
+        assert call(f"/api/jobs/{request_id}/cancel", {})[1]["status"] == "cancelled"
+        wait_for(lambda: not call("/api/state")[1]["audio_active"], timeout=15)
+        assert not (runtime / "xiaoai_bridge.duck.json").exists()
+    wait_for(lambda: not (runtime / "xiaoai_bridge.tts-volume.json").exists(), timeout=8)
+    assert not (path / "played").exists()
+    assert (path / "mixer-notifyvol").read_text().strip() == "60"
+    assert not any(
+        line.startswith("mysoftvol ") for line in (path / "mixer-writes").read_text().splitlines()
+    )
+    for name in ("audio", "volume", "session", "led"):
+        with (runtime / f"xiaoai_bridge.{name}.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert (
+        call(endpoint, {"request_id": request_id, "text": "synthetic", "volume": 20})[1]["status"]
+        == "cancelled"
+    )
 
 
 @pytest.mark.parametrize(

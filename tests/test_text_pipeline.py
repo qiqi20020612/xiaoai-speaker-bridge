@@ -95,10 +95,15 @@ esac
     )
     tts = tmp_path / "existing-tts"
     script(
+        tools / "mpg123",
+        '#!/bin/sh\n: > "$STATE_DIR/player-started"\nsleep "${PLAY_SLEEP:-0.02}"\n',
+    )
+    script(
         tts,
         """#!/bin/sh
 printf '%s\n' "$1" >> "$STATE_DIR/tts-calls"
 sleep "${TTS_SLEEP:-0.02}"
+mpg123
 """,
     )
     listener = tmp_path / "existing-listener"
@@ -708,7 +713,7 @@ def test_automatic_duck_restores_master_independently_of_tts(text_device, mode, 
     assert result.returncode == 0
     writes = (path / "mixer-writes").read_text().splitlines()
     assert writes == (
-        ["notifyvol 45%", "mysoftvol 10%", "notifyvol 60%", "mysoftvol 60%"]
+        ["notifyvol 45%", "mysoftvol 10%", "mysoftvol 60%", "notifyvol 60%"]
         if mode == "announce"
         else ["mysoftvol 10%", "mysoftvol 60%"]
     )
@@ -722,6 +727,10 @@ def test_duck_failure_or_finish_uses_new_ha_target(text_device, fail):
     enable_airplay_duck_fixture(path)
     script(
         path / "existing-tts",
+        "#!/bin/sh\nmpg123\n",
+    )
+    script(
+        path / "tools/mpg123",
         f"""#!/bin/sh
 printf '{{"revision":2,"versions":{{"master":2}},"volumes":{{"master":45}}}}' > "$STATE_DIR/xiaoai_bridge.desired.json"
 exit {1 if fail else 0}
@@ -745,13 +754,17 @@ def test_duck_cancel_restores_and_deferred_ha_volume_is_not_applied_early(
             "announce",
             json.dumps({"text": "test"}),
         ],
-        env={**env, "TTS_SLEEP": "2"},
+        env={**env, "PLAY_SLEEP": "2"},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
     )
     assert "synthesizing" in proc.stdout.readline()
+    deadline = time.monotonic() + 5
+    while not (path / "player-started").exists():
+        assert time.monotonic() < deadline
+        time.sleep(0.02)
     update = subprocess.run(
         [*speaker_shell, "-c", f'. "{path / "bridge/lib/common.sh"}";volume_write master 45'],
         env=env,

@@ -9,7 +9,14 @@ bridge_duck_begin() {
         .observed_sources=={airplay:true,bluetooth:false,mpd:false}' >/dev/null 2>&1 || return 0
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
     bridge_lock_for 3 7 || fail busy
-    voice_busy && { flock -u 7;fail busy; }
+    if [ -n "${XIAOAI_TTS_GATE:-}" ] && ! bridge_tts_gate_alive; then flock -u 7;exit 143;fi
+    if voice_busy; then
+        flock -u 7
+        # An already-owned remote Audio Lock can finish before voice records.
+        # Do not add a late duck after voice has captured its own baseline.
+        [ -z "${XIAOAI_TTS_GATE:-}" ] || return 0
+        fail busy
+    fi
     saved=$(percent mysoftvol)
     [ -n "$saved" ] || { flock -u 7;fail volume_unknown; }
     # Same 10% default as native wake attenuation: an absolute ceiling, never

@@ -104,6 +104,7 @@ def test_release_assets_have_architecture_versions_and_inner_outer_checksums(ass
     with tarfile.open(archive) as tar:
         names = tar.getnames()
         assert "xiaoai_bridge/lib/ducking.sh" in names
+        assert "xiaoai_bridge/lib/tts-playback.sh" in names
         assert "xiaoai_bridge/lib/task-feedback.sh" in names
         assert "xiaoai_bridge/lib/voice-led.sh" in names
         assert not any("adapter/" in name or name.endswith("config.json") for name in names)

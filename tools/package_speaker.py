@@ -58,7 +58,7 @@ def main():
                 (package / name).mkdir()
                 files = (
                     (
-                        "bootstrap.sh common.sh volume-recovery.sh voice-led.sh locks.sh adapter-check.sh device.sh conversation.sh conversation-curl.sh listener-hooks.sh listener-service.sh source-snapshot.sh text.sh airplay-volume.sh ducking.sh task-feedback.sh"
+                        "bootstrap.sh common.sh volume-recovery.sh voice-led.sh locks.sh adapter-check.sh device.sh conversation.sh conversation-curl.sh listener-hooks.sh listener-service.sh source-snapshot.sh text.sh tts-playback.sh airplay-volume.sh ducking.sh task-feedback.sh"
                     ).split()
                     if name == "lib"
                     else (
