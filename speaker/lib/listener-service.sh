@@ -5,6 +5,51 @@ action=$1
 voice_busy && exit 1
 adapter="$BRIDGE_DIR/adapter/listener.sh"
 
+# HA keeps explicit targets, while the native toggle owns mute sound/LEDs and
+# procd startup. Internal start/stop/restart below remain silent.
+if [ "${2:-}" = user ] && { [ "$action" = start ] || [ "$action" = stop ]; }; then
+    listener_status() {
+        if /etc/init.d/listener status >/dev/null 2>&1; then
+            listener_running=true
+        else
+            listener_result=$?
+            [ "$listener_result" -eq 1 ] || return 1
+            listener_running=false
+        fi
+    }
+    target=false;limit=15
+    [ "$action" != start ] || { target=true;limit=${XIAOAI_LISTENER_WAIT:-90}; }
+    listener_status || exit 1
+    if [ "$listener_running" != "$target" ]; then
+        if [ "$target" = true ] && flag '.enable_listener_adapter'; then
+            # Native start loads /data/listener from porcupine_launcher. Refuse
+            # a missing/late include instead of starting an unguarded Listener.
+            [ -x "$adapter" ] && [ -r "$BRIDGE_DIR/lib/bootstrap.sh" ] || exit 1
+            awk -v bridge=". $BRIDGE_DIR/lib/bootstrap.sh" '
+                {sub(/[[:space:]]+$/, "")}
+                $0==bridge {b=NR;bridges++}
+                $0==". /data/kws_bootstrap.sh" {k=NR;guards++}
+                END {exit !(bridges==1 && guards==1 && b<k)}
+            ' /data/listener || exit 1
+        fi
+        # Do not inherit silent-maintenance flags into a user/physical-key action.
+        (unset SILENT MUTE_LED; /etc/init.d/listener toggle) || exit 1
+    fi
+    count=0
+    while :; do
+        listener_status || exit 1
+        if [ "$listener_running" = "$target" ]; then
+            if [ "$target" = false ] || ! flag '.enable_listener_adapter'; then exit 0;fi
+            native_listener_pid=''
+            if hooks_ready &&
+               { read -r native_listener_pid < /var/run/listener.pid || [ -n "$native_listener_pid" ]; } &&
+               [ "$native_listener_pid" = "${hook_owner:-}" ]; then exit 0;fi
+        fi
+        [ "$count" -lt "$limit" ] || exit 1
+        sleep 1;count=$((count+1))
+    done
+fi
+
 wait_listener_exit() {
     count=0
     while /etc/init.d/listener status >/dev/null 2>&1; do

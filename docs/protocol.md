@@ -1,6 +1,6 @@
 # 协议与安全行为
 
-桥接协议 `1`、开发版本 `0.1.8`。IPv4 HTTP 默认 `8766`，随机 Bearer token 必填；配置 `0600`、持久 UUID 稳定。白名单最多 8 个 IPv4/CIDR，空数组表示允许所有可达地址；建议限制为 HA 地址。回环用于本机健康检查。HTTP 仅用于可信 LAN，部署者负责禁止公网端口映射。
+桥接协议 `1`、开发版本 `0.1.9`（草稿）。IPv4 HTTP 默认 `8766`，随机 Bearer token 必填；配置 `0600`、持久 UUID 稳定。白名单最多 8 个 IPv4/CIDR，空数组表示允许所有可达地址；建议限制为 HA 地址。回环用于本机健康检查。HTTP 仅用于可信 LAN，部署者负责禁止公网端口映射。
 
 ## 设备接口
 
@@ -19,7 +19,7 @@
 | `POST /api/conversation/text` | `request_id,text[,speak_response,use_context]`；LX06 执行原处理入口 |
 | `GET /api/jobs/ID` | accepted/running/synthesizing/playing/completed/failed/cancelled；可返回回复文字/错误 |
 | `POST /api/jobs/ID/cancel` | 取消播报或文字对话的 synthesizing/playing 尾段；意图/Conversation 执行中仍拒绝取消 |
-| `POST /api/listener` | 固定 start/stop/restart，语音活动时拒绝 |
+| `POST /api/listener` | 固定 start/stop/restart，语音活动时拒绝；start/stop 保持目标语义，仅状态不符时调用原生 toggle，验证目标/Adapter 就绪；restart 仍静默 |
 | `POST /api/conversation/reset` | 锁定共享会话后只重置原 EOAIC2_STATE |
 | `POST /api/bridge/restart` | `{}`；202 仅表示已调度，只调用 start.sh restart 并跳过 Listener；不入任务队列 |
 | `POST /api/ir` | 有限、类型校验的红外字段；需要验证标志和真实接口 |
