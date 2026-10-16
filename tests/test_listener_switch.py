@@ -1,6 +1,7 @@
 """Native mute toggles, explicit HA targets, and the existing KWS bootstrap."""
 
 import asyncio
+import copy
 import fcntl
 import http.client
 import json
@@ -23,6 +24,7 @@ from custom_components.xiaoai_speaker.client import BridgeError
 from custom_components.xiaoai_speaker.const import DOMAIN
 from speaker.tools.prepare_adapters import prepare_kws_guard
 from tests.test_capabilities import setup
+from tests.test_homeassistant import INFO, STATE
 from tests.test_homeassistant import mock_clients as mock_clients
 from tests.test_text_pipeline import ha_http as ha_http
 from tests.test_text_pipeline import script
@@ -572,7 +574,20 @@ async def test_native_ha_switch_and_physical_key_alternate_with_real_probe_state
     listener_bridge, hass, mock_clients
 ):
     call, physical, path = listener_bridge
-    entry, c = await setup(hass)
+    samples = copy.deepcopy((INFO, STATE))
+    # The coordinator replaces info.capabilities after the real Probe. Do not
+    # let this device's capabilities alter the shared samples of later tests.
+    with (
+        patch(
+            "custom_components.xiaoai_speaker.client.BridgeClient.info",
+            AsyncMock(return_value=copy.deepcopy(INFO)),
+        ),
+        patch(
+            "custom_components.xiaoai_speaker.client.BridgeClient.state",
+            AsyncMock(return_value=copy.deepcopy(STATE)),
+        ),
+    ):
+        entry, c = await setup(hass)
 
     async def request(method, endpoint, payload=None, **kwargs):
         status, value = await asyncio.to_thread(call, endpoint, payload)
@@ -645,3 +660,4 @@ async def test_native_ha_switch_and_physical_key_alternate_with_real_probe_state
         )
     finally:
         assert await hass.config_entries.async_unload(entry.entry_id)
+        assert (INFO, STATE) == samples
