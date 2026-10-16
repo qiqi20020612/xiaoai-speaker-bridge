@@ -126,7 +126,9 @@ static int value(struct parser *p, unsigned depth) {
     return emit(p, number);
 }
 static int copy_string(const struct json_doc *d, int object, const char *key, const char *output) {
-    char raw[513], quoted_value[1028];
+    /* Control bytes are rejected above; allow doubled quotes/backslashes plus
+     * json_quote's six-byte lookahead before each escape. */
+    char raw[513], quoted_value[sizeof raw * 2 + 4];
     int i = json_get(d, object, key);
     if (i < 0 || json_string(d, i, raw, sizeof raw) < 0 || !*raw)
         return 0;
@@ -198,16 +200,18 @@ int bridge_airplay_metadata(void) {
     /* A leading bounded field keeps subsequent optional fields simple. */
     fputs("\"file\":", stdout);
     if (json_string(d, json_get(d, metadata, "mpris:trackid"), track, sizeof track) >= 0) {
-        char q[516];
-        json_quote(track, q, sizeof q);
+        char q[sizeof track * 2 + 4];
+        if (json_quote(track, q, sizeof q) < 0)
+            goto done;
         fputs(q, stdout);
     } else
         fputs("null", stdout);
-    copy_string(d, metadata, "xesam:title", "title");
-    copy_string(d, metadata, "xesam:album", "album");
+    if (copy_string(d, metadata, "xesam:title", "title") < 0 ||
+        copy_string(d, metadata, "xesam:album", "album") < 0)
+        goto done;
     int artists = json_get(d, metadata, "xesam:artist");
     if (artists >= 0 && d->t[artists].type == J_ARRAY && d->t[artists].count <= 8) {
-        char artist[257], q[516];
+        char artist[257], q[sizeof artist * 2 + 4];
         int valid = 1;
         for (int i = artists + 1; i < d->t[artists].next; i = d->t[i].next)
             if (json_string(d, i, artist, sizeof artist) < 0)
@@ -216,8 +220,9 @@ int bridge_airplay_metadata(void) {
             fputs(",\"artist\":[", stdout);
             int count = 0;
             for (int i = artists + 1; i < d->t[artists].next; i = d->t[i].next) {
-                json_string(d, i, artist, sizeof artist);
-                json_quote(artist, q, sizeof q);
+                if (json_string(d, i, artist, sizeof artist) < 0 ||
+                    json_quote(artist, q, sizeof q) < 0)
+                    goto done;
                 printf("%s%s", count++ ? "," : "", q);
             }
             fputs("]", stdout);

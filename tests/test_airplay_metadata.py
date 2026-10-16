@@ -92,6 +92,28 @@ def test_metadata_types_units_unicode_and_literal_quotes(json_binary):
     assert "file://" not in result.stdout and ART_DIRECTORY not in result.stdout
 
 
+@pytest.mark.parametrize("character", ['"', "\\"])
+@pytest.mark.parametrize(
+    "key,kind,output,limit",
+    [
+        ("xesam:artist", "array", "artist", 256),
+        ("xesam:title", "string", "title", 512),
+        ("xesam:album", "string", "album", 512),
+        ("mpris:trackid", "string", "file", 256),
+    ],
+)
+def test_maximum_escaped_metadata_strings_remain_complete_json(
+    json_binary, character, key, kind, output, limit
+):
+    text = character * limit
+    expected = [text] if kind == "array" else text
+    result = parse(json_binary, remote_reply(metadata=[(key, kind, expected)]))
+    assert result.returncode == 0
+    value = json.loads(result.stdout)
+    assert value["song"][output] == expected
+    assert value["status"] == {"duration": 180, "elapsed": 10}
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -309,21 +331,24 @@ def test_artwork_open_restricts_paths_types_links_size_and_magic(artwork_cli, tm
 
 
 @pytest.mark.parametrize(
-    "state,active,failed,parse_failed",
+    "state,active,failed,parse_failed,escaped_artist",
     [
-        ("Playing", True, False, False),
-        ("Paused", True, False, False),
-        ("Stopped", False, False, False),
-        ("Stopped", True, False, False),
-        ("Playing", True, True, False),
-        ("Playing", True, False, True),
+        ("Playing", True, False, False, False),
+        ("Paused", True, False, False, False),
+        ("Stopped", False, False, False, False),
+        ("Stopped", True, False, False, False),
+        ("Playing", True, True, False, False),
+        ("Playing", True, False, True, False),
+        ("Playing", True, False, False, True),
     ],
 )
 def test_probe_reuses_remote_reply_and_clears_stale_or_failed_media(
-    volume_probe, native_json_binary, state, active, failed, parse_failed
+    volume_probe, native_json_binary, state, active, failed, parse_failed, escaped_artist
 ):
     run, path, env = volume_probe
     raw = remote_reply(state=state)
+    if escaped_artist:
+        raw = raw.replace("Synthetic Artist", '"' * 256)
     (path / "synthetic-remote").write_text(raw)
     script(
         path / "tools/dbus-send",
@@ -356,6 +381,10 @@ exec "{native_json_binary}" "$@"
     assert ("song" in airplay) == expected
     if expected:
         assert airplay["song"]["title"] == 'Synthetic "歌曲" \\ path'
+        assert airplay["song"]["artist"] == [
+            '"' * 256 if escaped_artist else "Synthetic Artist",
+            "Another Artist",
+        ]
     if attempted:
         assert (path / "metadata-calls").read_text().splitlines() == ["parse"]
     else:
