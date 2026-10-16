@@ -21,6 +21,8 @@ class ConversationHTTP:
         self.guard_end_entered = threading.Event()
         self.guard_end_release = threading.Event()
         self.conversation_entered = threading.Event()
+        self.hold_conversation = False
+        self.conversation_release = threading.Event()
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -79,6 +81,8 @@ class ConversationHTTP:
                     self.reply(404, {})
                     return
                 owner.conversation_entered.set()
+                if owner.hold_conversation:
+                    owner.conversation_release.wait(timeout=10)
                 if owner.state_dir:
                     with (owner.state_dir / "legacy-calls").open("a") as calls:
                         calls.write("conversation\n")

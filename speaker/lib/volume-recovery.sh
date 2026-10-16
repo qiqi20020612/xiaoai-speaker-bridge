@@ -99,8 +99,10 @@ bridge_recovery_schedule() {
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" ] ||
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" ] ||
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.tts-volume.json" ] || return 0
-    "$BRIDGE_DIR/lib/volume-recovery.sh" recover 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- \
-        </dev/null >/dev/null 2>&1 &
+    # Wait only for the existing recovery script to exec in its own session.
+    # Cancelled workers can then stop every remaining TTS descendant safely.
+    "$BRIDGE_JSON_BIN" --schedule-recovery "$BRIDGE_DIR" 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- \
+        </dev/null >/dev/null 2>&1
 }
 
 if [ "${0##*/}" = volume-recovery.sh ]; then

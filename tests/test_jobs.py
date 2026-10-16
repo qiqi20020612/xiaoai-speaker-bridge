@@ -1,9 +1,139 @@
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
 
 from custom_components.xiaoai_speaker.client import BridgeError
 from custom_components.xiaoai_speaker.jobs import JobManager
+
+
+async def test_cancel_bridge_accepted_announcement_reaches_device(hass):
+    client = AsyncMock()
+    client.submit.return_value = {"status": "accepted"}
+    client.job.return_value = {"status": "cancelled"}
+    client.cancel.return_value = {"status": "cancelled"}
+    accepted = asyncio.Event()
+    manager = JobManager(hass, client)
+    job = await manager.submit("announce", {"text": "synthetic speech"})
+    manager.on_change = lambda: (
+        accepted.set() if client.submit.await_count and job.status == "accepted" else None
+    )
+    manager.start()
+    try:
+        async with asyncio.timeout(3):
+            await accepted.wait()
+        assert manager.executing
+        await manager.cancel(job.request_id)
+        client.cancel.assert_awaited_once_with(job.request_id)
+        assert (await manager.wait(job, 3))["status"] == "cancelled"
+        assert client.submit.await_count == 1
+    finally:
+        await manager.close()
+
+
+async def test_cancel_after_explicit_busy_does_not_retry_or_contact_device(hass):
+    busy = asyncio.Event()
+    client = AsyncMock()
+
+    async def submit(*args):
+        busy.set()
+        raise BridgeError("busy")
+
+    client.submit.side_effect = submit
+    manager = JobManager(hass, client)
+    job = await manager.submit("announce", {"text": "synthetic speech"})
+    manager.start()
+    try:
+        async with asyncio.timeout(3):
+            await busy.wait()
+        assert (await manager.cancel(job.request_id))["status"] == "cancelled"
+        client.cancel.assert_not_awaited()
+        assert client.submit.await_count == 1
+    finally:
+        await manager.close()
+
+
+async def test_cancel_during_submission_never_claims_a_local_cancellation(hass):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    accepted = asyncio.Event()
+    client = AsyncMock()
+
+    async def submit(*args):
+        entered.set()
+        await release.wait()
+        return {"status": "accepted"}
+
+    client.submit.side_effect = submit
+    client.cancel.side_effect = BridgeError("job_not_found")
+    client.job.return_value = {"status": "cancelled"}
+    manager = JobManager(hass, client)
+    job = await manager.submit("announce", {"text": "synthetic speech"})
+    manager.on_change = lambda: accepted.set() if job.status == "accepted" else None
+    manager.start()
+    try:
+        async with asyncio.timeout(3):
+            await entered.wait()
+        with pytest.raises(BridgeError, match="job_not_found"):
+            await manager.cancel(job.request_id)
+        assert job.status == "running" and not job.done.is_set()
+        release.set()
+        async with asyncio.timeout(3):
+            await accepted.wait()
+        client.cancel.side_effect = None
+        client.cancel.return_value = {"status": "cancelled"}
+        await manager.cancel(job.request_id)
+        assert (await manager.wait(job, 3))["status"] == "cancelled"
+        assert client.submit.await_count == 1 and client.cancel.await_count == 2
+    finally:
+        release.set()
+        await manager.close()
+
+
+async def test_lost_cancel_acknowledgement_is_reconciled_without_resubmission(hass):
+    client = AsyncMock()
+    client.submit.return_value = {"status": "accepted"}
+    client.job.return_value = {"status": "cancelled"}
+    client.cancel.side_effect = BridgeError("connection_failed", uncertain=True)
+    accepted = asyncio.Event()
+    manager = JobManager(hass, client)
+    job = await manager.submit("announce", {"text": "synthetic speech"})
+    manager.on_change = lambda: accepted.set() if job.status == "accepted" else None
+    manager.start()
+    try:
+        async with asyncio.timeout(3):
+            await accepted.wait()
+        with pytest.raises(BridgeError, match="connection_failed"):
+            await manager.cancel(job.request_id)
+        assert not job.done.is_set()
+        assert (await manager.wait(job, 3))["status"] == "cancelled"
+        assert client.submit.await_count == 1 and client.cancel.await_count == 1
+    finally:
+        await manager.close()
+
+
+async def test_bridge_accepted_conversation_cancellation_is_not_faked_locally(hass):
+    client = AsyncMock()
+    client.submit.return_value = {"status": "accepted"}
+    client.job.return_value = {"status": "completed", "reply_text": "done"}
+    client.cancel.side_effect = BridgeError("cannot_cancel_running_conversation")
+    accepted = asyncio.Event()
+    manager = JobManager(hass, client)
+    job = await manager.submit("send_text", {"text": "synthetic instruction"})
+    manager.on_change = lambda: (
+        accepted.set() if client.submit.await_count and job.status == "accepted" else None
+    )
+    manager.start()
+    try:
+        async with asyncio.timeout(3):
+            await accepted.wait()
+        with pytest.raises(BridgeError, match="cannot_cancel_running_conversation"):
+            await manager.cancel(job.request_id)
+        assert not job.done.is_set() and job.status == "accepted"
+        assert (await manager.wait(job, 3))["status"] == "completed"
+        assert client.submit.await_count == 1
+    finally:
+        await manager.close()
 
 
 async def test_lost_acceptance_is_reconciled_without_reexecuting(hass):

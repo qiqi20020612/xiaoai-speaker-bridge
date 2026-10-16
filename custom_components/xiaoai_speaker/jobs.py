@@ -28,6 +28,7 @@ class Job:
     digest: str = field(default="", compare=False)
     context_id: str | None = field(default=None, compare=False)
     text_digest: str = field(default="", compare=False)
+    dispatched: bool = field(default=False, compare=False)
 
 
 class JobManager:
@@ -60,7 +61,10 @@ class JobManager:
 
     @property
     def executing(self) -> bool:
-        return any(not job.done.is_set() and job.status != "accepted" for job in self.jobs.values())
+        return any(
+            not job.done.is_set() and (job.dispatched or job.status != "accepted")
+            for job in self.jobs.values()
+        )
 
     def start(self) -> None:
         self._worker = self.hass.async_create_background_task(self._run(), "XiaoAI job queue")
@@ -149,7 +153,9 @@ class JobManager:
             raise BridgeError("job_not_found")
         if job.done.is_set():
             return {"request_id": request_id, "status": job.status}
-        if job.status == "accepted":
+        # Bridge also returns "accepted" after dispatch. Only work that cannot
+        # have reached the device may be cancelled exclusively in the HA queue.
+        if not job.dispatched:
             job.status = "cancelled"
             job.done.set()
             self._active_text.discard(job.text_digest)
@@ -166,6 +172,8 @@ class JobManager:
                 return
             try:
                 if not accepted:
+                    # An in-flight/lost response may already have started TTS.
+                    job.dispatched = True
                     state = await self.client.submit(job.kind, job.payload)
                     accepted = True
                 else:
@@ -181,6 +189,7 @@ class JobManager:
                     return
             except BridgeError as err:
                 if err.code == "busy" and not accepted:
+                    job.dispatched = False  # Explicit refusal: nothing was started.
                     await asyncio.sleep(1)
                     continue
                 if err.uncertain:

@@ -18,11 +18,13 @@
 | `POST /api/tts/announce` | `request_id,text[,volume]`；仅朗读 |
 | `POST /api/conversation/text` | `request_id,text[,speak_response,use_context]`；LX06 执行原处理入口 |
 | `GET /api/jobs/ID` | accepted/running/synthesizing/playing/completed/failed/cancelled；可返回回复文字/错误 |
-| `POST /api/jobs/ID/cancel` | 取消自己启动的播报；执行中的对话拒绝取消 |
+| `POST /api/jobs/ID/cancel` | 取消播报或文字对话的 synthesizing/playing 尾段；意图/Conversation 执行中仍拒绝取消 |
 | `POST /api/listener` | 固定 start/stop/restart，语音活动时拒绝 |
 | `POST /api/conversation/reset` | 锁定共享会话后只重置原 EOAIC2_STATE |
 | `POST /api/bridge/restart` | `{}`；202 仅表示已调度，只调用 start.sh restart 并跳过 Listener；不入任务队列 |
 | `POST /api/ir` | 有限、类型校验的红外字段；需要验证标志和真实接口 |
+
+v0.1.9 的取消不会撤销已经执行的指令或清除已更新的上下文。HA 只有未派发或明确被 busy 拒绝的任务可本地取消，其余情况必须调用音箱端；丢失确认时按同一 request_id 查询，不重新执行。`cancelled` 确认取消请求，`audio_active` 在清理完成前保持，避免新任务抢占尚未恢复的资源；同组残留进程在 worker 被回收前停止。重复取消不延长原有清理宽限。当前 v0.1.9 仍为草稿开发版，详见 [修复记录](lx06-v019.md)。
 
 除 `/api/policy`、任务取消和 Bridge 重启外，控制请求都需要 `[A-Za-z0-9_-]{1,64}` request ID。同 ID、同接口及同请求体在最近 16 条记录窗口内返回已有状态；不同请求返回 `request_id_conflict`。音箱重启后记录消失，**不能把重发当跨重启 exactly-once**。HA 任务队列使用运行期语义摘要并在完成后清空 payload；两个原生文字实体独立保留最后一次成功提交的原文。
 
