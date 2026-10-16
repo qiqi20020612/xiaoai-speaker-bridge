@@ -1,0 +1,517 @@
+"""A sender slider update must not leave the shared mixer at the Duck cap."""
+
+import fcntl
+import json
+import os
+import signal
+import subprocess
+import time
+
+import pytest
+
+from tests.test_lx06_v016 import json_binary as json_binary
+from tests.test_lx06_v016 import op
+from tests.test_text_pipeline import enable_airplay_duck_fixture, script
+from tests.test_text_pipeline import ha_http as ha_http
+from tests.test_text_pipeline import text_device as text_device
+
+CONFIG = """general = {
+    volume_control_profile = "standard";
+    volume_range_db = 30;
+    volume_max_db = -4.0;
+};
+alsa = { mixer_control_name = "mysoftvol"; };
+"""
+CONTROL = """numid=1,iface=MIXER,name='mysoftvol'
+  ; type=INTEGER,access=rw---RW-,values=2,min=0,max=255,step=0
+  : values=26,26
+  | dBscale-min=-51.00dB,step=0.20dB,mute=0
+"""
+
+
+def gain(binary, path, raw, profile="standard", baseline="60", control=CONTROL, start="1"):
+    return subprocess.run(
+        [str(binary), "--airplay-volume-target", str(path), raw, profile, baseline, start],
+        input=control,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+
+def config_file(path, source=CONFIG):
+    path.write_text(source)
+    os.utime(path, (1, 1))
+    return path
+
+
+@pytest.mark.parametrize(
+    "raw,target",
+    [
+        ("-30", "-34.00dB"),
+        ("-29", "-31.69dB"),
+        ("-25", "-22.46dB"),
+        ("-20", "-17.50dB"),
+        ("-18", "-15.70dB"),
+        ("-17", "-14.80dB"),
+        ("-15", "-13.00dB"),
+        ("-10", "-9.00dB"),
+        ("-6", "-7.00dB"),
+        ("-5", "-6.50dB"),
+        ("0", "-4.00dB"),
+        ("-144", "60%"),
+    ],
+)
+def test_standard_gain_uses_shairport_centi_db_taper_not_linear_percent(
+    json_binary, tmp_path, raw, target
+):
+    result = gain(json_binary, config_file(tmp_path / "sps.conf"), raw)
+    assert result.returncode == 0 and not result.stderr
+    assert result.stdout.strip() == target
+
+
+@pytest.mark.parametrize("raw,target", [("-30", "-34.00dB"), ("-18", "-22.00dB"), ("0", "-4.00dB")])
+def test_flat_profile_is_taken_from_current_dbus_not_cached_config(
+    json_binary, tmp_path, raw, target
+):
+    result = gain(json_binary, config_file(tmp_path / "sps.conf"), raw, "flat")
+    assert result.returncode == 0 and result.stdout.strip() == target
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda s: s.replace("volume_max_db = -4.0;", ""),
+        lambda s: s.replace("volume_range_db = 30;", ""),
+        lambda s: s.replace('"mysoftvol"', '"another-control"'),
+        lambda s: s.replace("mixer_control_name", 'output_device="hw:1"; mixer_control_name'),
+        lambda s: s.replace("volume_range_db = 30;", "volume_range_db = 90;"),
+        lambda s: s.replace("volume_range_db = 30;", "volume_range_db = -1;"),
+        lambda s: s.replace("volume_max_db = -4.0;", "volume_max_db = 5;"),
+        lambda s: s + '@include "another.conf"',
+        lambda s: s.replace("volume_max_db = -4.0;", "volume_max_db = -4; volume_max_db = -8;"),
+        lambda s: s.replace(
+            "volume_range_db = 30;", 'volume_range_db = 30; ignore_volume_control="yes";'
+        ),
+        lambda s: s.replace(
+            "mixer_control_name", 'use_hardware_mute_if_available="yes"; mixer_control_name'
+        ),
+        lambda s: s.replace(
+            "mixer_control_name", 'mute_using_playback_switch="yes"; mixer_control_name'
+        ),
+        lambda s: s.replace("mixer_control_name", "mixer_control_index=1; mixer_control_name"),
+        lambda s: s.replace(
+            "volume_range_db = 30;", 'volume_range_db = 30; output_backend="pipe";'
+        ),
+        lambda s: s.replace("volume_range_db = 30;", "volume_range_db = 30.5;"),
+        lambda s: s + "\0",
+        lambda s: s + "/* unterminated",
+        lambda s: s + "x" * 16384,
+    ],
+)
+def test_unknown_or_unsafe_config_cannot_produce_a_guessed_target(json_binary, tmp_path, change):
+    result = gain(json_binary, config_file(tmp_path / "sps.conf", change(CONFIG)), "-6")
+    assert result.returncode == 2 and not result.stdout
+
+
+@pytest.mark.parametrize(
+    "raw,profile,control,start",
+    [
+        ("nan", "standard", CONTROL, "1"),
+        ("inf", "standard", CONTROL, "1"),
+        ("-31", "standard", CONTROL, "1"),
+        ("1", "standard", CONTROL, "1"),
+        ("-6", "dasl_tapered", CONTROL, "1"),
+        ("-6", "standard", CONTROL.replace("mute=0", "mute=1"), "1"),
+        ("-6", "standard", CONTROL.replace("step=0.20dB", "step=0.00dB"), "1"),
+        ("-6", "standard", CONTROL.replace("dBscale-min", "dBlinear-min"), "1"),
+        ("-6", "standard", CONTROL.replace("values=2", "values=1"), "1"),
+        ("-6", "standard", CONTROL.replace("mysoftvol", "another-control"), "1"),
+        ("-6", "standard", CONTROL * 2, "1"),
+        ("-6", "standard", "x" * 20000, "1"),
+        ("-6", "standard", CONTROL, "0"),
+        ("-6", "standard", CONTROL, "1.5"),
+        ("-6", "standard", CONTROL, "9007199254740991"),
+    ],
+)
+def test_invalid_live_inputs_fail_without_a_target(
+    json_binary, tmp_path, raw, profile, control, start
+):
+    result = gain(
+        json_binary, config_file(tmp_path / "sps.conf"), raw, profile, control=control, start=start
+    )
+    assert result.returncode == 2 and not result.stdout
+
+
+def test_config_modified_after_process_start_is_not_treated_as_loaded(json_binary, tmp_path):
+    path = tmp_path / "sps.conf"
+    path.write_text(CONFIG)
+    assert gain(json_binary, path, "-6").returncode == 2
+
+
+def test_symlink_config_cannot_change_which_configuration_is_verified(json_binary, tmp_path):
+    source = config_file(tmp_path / "source.conf")
+    link = tmp_path / "sps.conf"
+    link.symlink_to(source)
+    assert gain(json_binary, link, "-6").returncode == 2
+
+
+def test_supported_comments_and_unrelated_config_sections_are_not_interpreted(
+    json_binary, tmp_path
+):
+    source = (
+        CONFIG.replace("general =", "/* comment */ general =").replace(
+            "volume_max_db", "// comment\nvolume_max_db"
+        )
+        + 'pipe = { name="synthetic"; }; diagnostics={ log_verbosity=0; };'
+    )
+    result = gain(json_binary, config_file(tmp_path / "sps.conf", source), "-6")
+    assert result.returncode == 0 and result.stdout.strip() == "-7.00dB"
+
+
+def install_shared_mixer(path):
+    """Only proc/mixer/DBus transport is synthetic; recovery code stays real."""
+    enable_airplay_duck_fixture(path)
+    config_file(path / "sps.conf")
+    (path / "sps-control").write_text(CONTROL)
+    (path / "sps-cmdline").write_bytes(
+        b"/usr/bin/shairport-sync\0-c\0" + os.fsencode(path / "sps.conf") + b"\0"
+    )
+    recovery = path / "bridge/lib/sender-recovery.sh"
+    recovery.write_text(
+        recovery.read_text().replace('"/proc/$sender_pid/cmdline"', '"$STATE_DIR/sps-cmdline"')
+    )
+    script(path / "tools/pidof", f"#!/bin/sh\nprintf '%s\\n' {os.getpid()}\n")
+    script(
+        path / "tools/dbus-send",
+        """#!/bin/sh
+case "$*" in
+ *org.bluez*) printf 'string "State"\\nvariant string "idle"\\n';exit 0;;
+ *Properties.GetAll*) ;;
+ *) : > "$STATE_DIR/sender-write-attempted";exit 1;;
+esac
+if [ -f "$STATE_DIR/fail-query" ];then exit 1;fi
+raw=-18;[ ! -r "$STATE_DIR/sender-raw" ] || read raw < "$STATE_DIR/sender-raw"
+active=true;[ ! -r "$STATE_DIR/sender-active" ] || read active < "$STATE_DIR/sender-active"
+profile=standard;[ ! -r "$STATE_DIR/sender-profile" ] || read profile < "$STATE_DIR/sender-profile"
+case "$*" in *string:org.gnome.ShairportSync.RemoteControl*)
+ committed=$(LC_ALL=C awk -v raw="$raw" 'BEGIN{printf "%.2f",raw}')
+ [ ! -r "$STATE_DIR/committed-raw" ] || read committed < "$STATE_DIR/committed-raw"
+ printf 'string "AirplayVolume"\\nvariant double %s\\n' "$committed";exit;;esac
+printf 'string "Active"\\nvariant boolean %s\\nstring "Volume"\\nvariant double %s\\n' "$active" "$raw"
+printf 'string "Version"\\nvariant string "4.3.5"\\nstring "VolumeControlProfile"\\nvariant string "%s"\\n' "$profile"
+""",
+    )
+    mixer = path / "tools/amixer"
+    original = path / "tools/original-amixer"
+    mixer.rename(original)
+    script(
+        mixer,
+        """#!/bin/sh
+if [ "$1" = cget ];then cat "$STATE_DIR/sps-control";exit;fi
+[ "$1" != -- ] || shift
+case "$1:$2:$3" in
+ sset:mysoftvol:*dB)
+   [ ! -f "$STATE_DIR/fail-gain-write" ] || exit 1
+   printf '%s %s\\n' "$2" "$3" >> "$STATE_DIR/mixer-writes"
+   case "$3" in -7.00dB) level=86;; -9.00dB) level=82;; -45.88dB) level=10;; *) exit 1;; esac
+   printf '%s\\n' "$level" > "$STATE_DIR/mixer-mysoftvol"
+   if [ -f "$STATE_DIR/change-during-write" ];then
+     rm "$STATE_DIR/change-during-write";printf '%s\\n' -10 > "$STATE_DIR/sender-raw"
+   fi
+   if [ -f "$STATE_DIR/next-raw" ];then
+     mv "$STATE_DIR/next-raw" "$STATE_DIR/sender-raw"
+   fi
+   if [ -f "$STATE_DIR/query-fails-after-write" ];then
+     rm "$STATE_DIR/query-fails-after-write";touch "$STATE_DIR/fail-query"
+   fi
+   if [ -f "$STATE_DIR/hold-after-write" ];then
+     touch "$STATE_DIR/gain-written";sleep 30
+   fi
+   exit 0;;
+esac
+exec "$STATE_DIR/tools/original-amixer" "$@"
+""",
+    )
+
+
+def pending_journal(path, **extra):
+    journal = path / "xiaoai_bridge.duck.json"
+    journal.write_text(
+        json.dumps(
+            {
+                "owner": 0,
+                "start": "",
+                "revision": 1,
+                "volumes": {"master": 60},
+                "applied_master": 10,
+                "airplay_raw": "-18",
+                "airplay_active": "true",
+                **extra,
+            }
+        )
+    )
+    (path / "sender-raw").write_text("-6\n")
+    (path / "mixer-mysoftvol").write_text("10\n")
+    return journal
+
+
+def recover(path, env, speaker_shell):
+    return subprocess.run(
+        [*speaker_shell, "-c", f'. "{path}/bridge/lib/common.sh"\nbridge_recover_pending'],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+@pytest.mark.parametrize("kind", ["duck", "voice-volume"])
+def test_ordinary_recovery_does_not_load_sender_resolver(text_device, speaker_shell, kind):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path)
+    if kind != "duck":
+        journal = journal.rename(path / f"xiaoai_bridge.{kind}.json")
+    (path / "sender-raw").write_text("-18\n")
+    (path / "bridge/lib/sender-recovery.sh").write_text(
+        ': > "$STATE_DIR/resolver-loaded"\nexit 99\n'
+    )
+    assert recover(path, env, speaker_shell).returncode == 0
+    assert not journal.exists() and not (path / "resolver-loaded").exists()
+    assert (path / "mixer-mysoftvol").read_text().strip() == "60"
+
+
+@pytest.mark.parametrize("mode", ["announce", "send_text"])
+def test_sender_change_while_playing_ends_duck_at_exact_latest_gain(text_device, mode):
+    call, path, _ = text_device
+    install_shared_mixer(path)
+    script(path / "tools/mpg123", "#!/bin/sh\nprintf '%s\\n' -6 > \"$STATE_DIR/sender-raw\"\n")
+    result, _ = call(mode, "synthetic", volume=20)
+    assert result.returncode == 0, result.stdout
+    assert (path / "mixer-mysoftvol").read_text().strip() == "86"
+    assert (path / "sender-raw").read_text().strip() == "-6"
+    assert (path / "mixer-notifyvol").read_text().strip() == "60"
+    assert not (path / "xiaoai_bridge.duck.json").exists()
+    assert not (path / "sender-write-attempted").exists()
+    assert "mysoftvol 60%" not in (path / "mixer-writes").read_text().splitlines()
+
+
+@pytest.mark.parametrize(
+    "fault", ["change-during-write", "query-fails-after-write", "fail-gain-write"]
+)
+def test_racing_sender_or_failed_write_keeps_repair_intent_for_retry(
+    text_device, speaker_shell, fault
+):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path)
+    (path / fault).touch()
+    result = recover(path, env, speaker_shell)
+    assert result.returncode != 0
+    assert json.loads(journal.read_text())["sender_recovery"] is True
+    if fault == "query-fails-after-write":
+        (path / "fail-query").unlink()
+        (path / "sender-raw").write_text("-10\n")
+    elif fault == "fail-gain-write":
+        (path / fault).unlink()
+    result = recover(path, env, speaker_shell)
+    assert result.returncode == 0, result.stderr
+    assert not journal.exists()
+    assert (path / "mixer-mysoftvol").read_text().strip() == (
+        "86" if fault == "fail-gain-write" else "82"
+    )
+    assert not (path / "sender-write-attempted").exists()
+
+
+def test_newer_ha_master_wins_over_interrupted_sender_repair(text_device, speaker_shell):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path, sender_recovery=True)
+    (path / "xiaoai_bridge.desired.json").write_text(
+        '{"revision":2,"versions":{"master":2},"volumes":{"master":75}}'
+    )
+    result = recover(path, env, speaker_shell)
+    assert result.returncode == 0 and not journal.exists()
+    assert (path / "mixer-mysoftvol").read_text().strip() == "75"
+    assert "dB" not in (path / "mixer-writes").read_text()
+
+
+def test_sender_can_intentionally_choose_the_same_ten_percent_as_the_cap(
+    text_device, speaker_shell
+):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    config_file(path / "sps.conf", CONFIG.replace("volume_range_db = 30", "volume_range_db = 45"))
+    journal = pending_journal(path)
+    (path / "sender-raw").write_text("-29.1\n")
+    result = recover(path, env, speaker_shell)
+    assert result.returncode == 0 and not journal.exists()
+    assert (path / "mixer-mysoftvol").read_text().strip() == "10"
+    assert (path / "mixer-writes").read_text().splitlines() == ["mysoftvol -45.88dB"]
+
+
+def test_main_volume_alone_is_not_a_completed_shairport_gain_update(text_device, speaker_shell):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path)
+    (path / "committed-raw").write_text("-18\n")
+    assert recover(path, env, speaker_shell).returncode != 0
+    assert json.loads(journal.read_text())["sender_recovery"] is True
+    (path / "committed-raw").write_text("-6.0\n")
+    assert recover(path, env, speaker_shell).returncode == 0
+    assert not journal.exists()
+
+
+@pytest.mark.parametrize("race", [False, True])
+def test_metadata_rounding_does_not_strand_fractional_targets_or_hide_main_updates(
+    text_device, speaker_shell, race
+):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path)
+    (path / "sender-raw").write_text("-6.001\n")
+    if race:
+        # Both values publish -6.00 in metadata, but main Volume changed.
+        (path / "next-raw").write_text("-6.002\n")
+    result = recover(path, env, speaker_shell)
+    assert (result.returncode != 0) is race
+    assert journal.exists() is race
+    if race:
+        assert recover(path, env, speaker_shell).returncode == 0 and not journal.exists()
+    assert (path / "mixer-mysoftvol").read_text().strip() == "86"
+
+
+def test_sender_mute_is_preserved_and_cap_is_only_lifted_after_mute_ack(text_device, speaker_shell):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path)
+    (path / "sender-raw").write_text("-144\n")
+    (path / "committed-raw").write_text("-6\n")
+    assert recover(path, env, speaker_shell).returncode != 0
+    assert not (path / "mixer-writes").exists() and journal.exists()
+    (path / "committed-raw").write_text("-144\n")
+    assert recover(path, env, speaker_shell).returncode == 0
+    assert not journal.exists()
+    assert (path / "mixer-mysoftvol").read_text().strip() == "60"
+    assert (path / "sender-raw").read_text().strip() == "-144"
+    assert not (path / "sender-write-attempted").exists()
+
+
+@pytest.mark.parametrize(
+    "args", [b"-c\0/unused\0--\0-m\0other\0", b"-o\0pipe\0", b"-c\0relative.conf\0"]
+)
+def test_unproved_process_arguments_do_not_modify_master(text_device, speaker_shell, args):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path)
+    (path / "sps-cmdline").write_bytes(b"/usr/bin/shairport-sync\0" + args)
+    assert recover(path, env, speaker_shell).returncode != 0
+    assert journal.exists() and not (path / "mixer-writes").exists()
+
+
+@pytest.mark.parametrize("fault", ["fail-query", "unknown-profile", "unknown-config"])
+def test_unknown_observation_never_discards_journal_or_blocks_other_channels(
+    text_device, speaker_shell, fault
+):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path, volumes={"master": 60, "tts": 55})
+    if fault == "fail-query":
+        (path / fault).touch()
+    elif fault == "unknown-profile":
+        (path / "sender-profile").write_text("unsupported\n")
+    else:
+        config_file(path / "sps.conf", CONFIG + '@include "unknown.conf"')
+    result = recover(path, env, speaker_shell)
+    assert result.returncode != 0
+    assert json.loads(journal.read_text())["volumes"] == {"master": 60}
+    assert (path / "mixer-mysoftvol").read_text().strip() == "10"
+    assert (path / "mixer-notifyvol").read_text().strip() == "55"
+
+
+@pytest.mark.parametrize("forced,current", [(False, 10), (True, 10), (True, 86)])
+def test_confirmed_stopped_sender_can_finish_without_touching_a_new_master(
+    text_device, speaker_shell, forced, current
+):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path, sender_recovery=forced)
+    (path / "mixer-mysoftvol").write_text(f"{current}\n")
+    (path / "sender-active").write_text("false\n")
+    result = recover(path, env, speaker_shell)
+    assert result.returncode == 0 and not journal.exists()
+    assert (path / "mixer-mysoftvol").read_text().strip() == ("60" if current == 10 else "86")
+
+
+def test_kill_after_gain_write_recovers_after_owner_dies(text_device, speaker_shell):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path)
+    (path / "hold-after-write").touch()
+    proc = subprocess.Popen(
+        [*speaker_shell, "-c", f'. "{path}/bridge/lib/common.sh"\nbridge_recover_pending'],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 8
+        while not (path / "gain-written").exists():
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        assert json.loads(journal.read_text())["sender_recovery"] is True
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate(timeout=5)
+        (path / "hold-after-write").unlink()
+        (path / "sender-raw").write_text("-10\n")
+        assert recover(path, env, speaker_shell).returncode == 0
+        assert not journal.exists()
+        assert (path / "mixer-mysoftvol").read_text().strip() == "82"
+        with (path / "xiaoai_bridge.volume.lock").open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.communicate(timeout=5)
+
+
+def test_sender_repair_marker_survives_duck_to_voice_handoff(json_binary, tmp_path):
+    duck = tmp_path / "duck.json"
+    duck.write_text(
+        json.dumps(
+            {
+                "owner": 77,
+                "start": "88",
+                "revision": 1,
+                "volumes": {"master": 60},
+                "airplay_raw": "-18",
+                "airplay_active": "true",
+                "applied_master": 10,
+                "sender_recovery": True,
+            }
+        )
+    )
+    desired = tmp_path / "desired.json"
+    desired.write_text("{}")
+    result = op(
+        json_binary,
+        "journal",
+        desired,
+        duck,
+        '{"master":86,"bluetooth":50}',
+        77,
+        88,
+        "-6",
+        "true",
+        86,
+    )
+    assert result.returncode == 0
+    voice = json.loads(result.stdout)
+    assert voice["sender_recovery"] is True and voice["volumes"] == {"master": 86, "bluetooth": 50}
+    target = tmp_path / "voice.json"
+    target.write_text(json.dumps({**voice, "applied_master": 10}))
+    result = op(json_binary, "recovery-plan", target, desired, "-6", "true", "10")
+    assert result.stdout.splitlines() == ["master\tpending", "bluetooth\t50"]

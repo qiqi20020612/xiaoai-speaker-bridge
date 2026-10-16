@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "airplay.h"
+#include "airplay_volume.h"
 #include "json.h"
 #include "json_ops.h"
 #include <arpa/inet.h>
@@ -1699,6 +1700,8 @@ static int mpd_state(void) {
     return 0;
 }
 int main(int argc, char **argv) {
+    if (argc == 7 && strcmp(argv[1], "--airplay-volume-target") == 0)
+        return bridge_airplay_volume_target(argv[2], argv[3], argv[4], argv[5], argv[6]);
     if (argc == 3 && strcmp(argv[1], "--schedule-recovery") == 0)
         return schedule_recovery(argv[2]);
     if (argc == 2 && strcmp(argv[1], "--airplay-metadata") == 0)

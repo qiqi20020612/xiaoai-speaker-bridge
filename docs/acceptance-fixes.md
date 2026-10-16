@@ -35,7 +35,7 @@ Probe 在短暂的非阻塞 Volume Lock 内关联 mixer 读数与任一 Journal 
 
 HA 不再显示避让开关和上限，加载配置条目时只清理 announce_ducking/announce_duck_volume 旧选项，保留其他配置。音箱示例和 probe 删除专用验证标记/能力；旧配置中残留的 verified.announcement_ducking 不参与判断。协议 1 保持，旧端在过渡期间发送的合法数值 duck_volume 仍通过类型校验但被忽略，不能改变固定衰减目标。先更新音箱端再更新 HA；新 HA 连接旧音箱时原播报/对话继续可用，自动避让需新版音箱端。
 
-复用原语音的 bridge_volume_journal / bridge_volume_recover_locked、通道版本与音量锁。取消、TTS 失败、超时的 TERM 清理恢复原值或用户新目标。独立 duck Journal 保留语音抢占所需的原始基线，在 volume.lock 下移交给 listener；旧任务不把衰减值当原值，也不覆盖录音期衰减。恢复锁/混音器失败保留 /tmp 恢复记录，释放音频/语音/LED 所有权后有界重试，下一次安全操作也重试。发送端目标已改变时不回写旧 master；若当前值仍为衰减值、无法确认发送端新目标，保留 Journal 待明确目标解决，不猜测映射。/tmp 掉电丢失、实际路由、听感及共享控件竞态仍需真机验收。
+复用原语音的 bridge_volume_journal / bridge_volume_recover_locked、通道版本与音量锁。取消、TTS 失败、超时的 TERM 清理恢复原值或用户新目标。独立 duck Journal 保留语音抢占所需的原始基线，在 volume.lock 下移交给 listener；旧任务不把衰减值当原值，也不覆盖录音期衰减。恢复锁/混音器失败保留 /tmp 恢复记录，释放音频/语音/LED 所有权后有界重试，下一次安全操作也重试。发送端目标已改变时不回写旧 master。v0.1.9 对仍等于 cap 的 Duck PENDING 增加受限恢复：只有验证了运行中 Shairport 的已加载配置、实际 ALSA dB TLV 和目标曲线，才按当前 raw 恢复共享 mixer，并复查发送端已应用该值；持续变化/失败保留恢复标志，HA 新版本仍优先。不能确认目标时保留原 PENDING，不猜测映射或回发旧 raw，详见 [v0.1.9 修复记录](lx06-v019.md#发送端调音后-duck-卡在-pending)。/tmp 掉电丢失、实际路由、听感及共享控件竞态仍需真机验收。
 
 ## 文本输入隐私
 

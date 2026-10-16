@@ -281,6 +281,10 @@ static int journal(struct document *desired, struct document *duck, struct docum
     char duck_raw[128], duck_active[16];
     double applied = -1, master;
     int master_index = field(values, 0, "master"), override_master = 0;
+    int sender_index = field(duck, 0, "sender_recovery");
+    if (have_duck && sender_index >= 0 && duck->d.t[sender_index].type != J_BOOL)
+        return -1;
+    int sender_recovery = have_duck && json_bool(&duck->d, sender_index, 0);
     if (have_duck) {
         int v = field(duck, 0, "volumes");
         double target_version;
@@ -303,7 +307,7 @@ static int journal(struct document *desired, struct document *duck, struct docum
         if (!*active || current == applied) {
             raw = duck_raw;
             active = duck_active;
-        } else if ((strcmp(raw, duck_raw) || strcmp(active, duck_active)) &&
+        } else if ((sender_recovery || strcmp(raw, duck_raw) || strcmp(active, duck_active)) &&
                    target_version <= revision) {
             if (!volume(current))
                 return -1;
@@ -323,6 +327,8 @@ static int journal(struct document *desired, struct document *duck, struct docum
         return -1;
     if (applied != -1)
         printf(",\"applied_master\":%.17g", applied);
+    if (sender_recovery)
+        fputs(",\"sender_recovery\":true", stdout);
     fputs(",\"volumes\":", stdout);
     if (override_master) {
         const char *const skip[] = {"master", NULL};
@@ -339,6 +345,10 @@ static int recovery(struct document *saved, struct document *desired, char **a) 
     double revision, applied, current = -1;
     char raw[128], active[16];
     int v = field(saved, 0, "volumes");
+    int sender_index = field(saved, 0, "sender_recovery");
+    if (sender_index >= 0 && saved->d.t[sender_index].type != J_BOOL)
+        return -1;
+    int sender_recovery = json_bool(&saved->d, sender_index, 0);
     if (!object(saved, 0) || !object(desired, 0) || volumes(saved, v) < 0 ||
         json_number(&saved->d, field(saved, 0, "revision"), &revision) < 0 || !counter(revision) ||
         optional_volume(saved, field(saved, 0, "applied_master"), &applied) < 0 ||
@@ -358,6 +368,14 @@ static int recovery(struct document *saved, struct document *desired, char **a) 
                     0 ||
                 !volume(n))
                 return -1;
+        } else if (!strcmp(key, "master") && sender_recovery) {
+            /* A prior sender repair may have written the gain before dying or
+             * observing another slider update. It must be verified, not mistaken
+             * for an unrelated user's master write and silently discarded. */
+            if (!strcmp(a[3], "false") && current >= 0 && current != applied)
+                continue;
+            printf("master\tpending\n");
+            continue;
         } else if (!strcmp(key, "master") && (!strcmp(active, "true") || !strcmp(a[3], "true")) &&
                    (strcmp(raw, a[2]) || strcmp(active, a[3]))) {
             /* Compare JSON numbers, not their decimal formatting. Never infer
@@ -436,6 +454,12 @@ int bridge_json_cli(int argc, char **argv) {
                     puts(start);
             }
         }
+    } else if (argc == 1 && !strcmp(op, "sender-recovery") && load(&a, NULL, 0) == 0 &&
+               object(&a, 0)) {
+        const char *const skip[] = {"sender_recovery", NULL};
+        fputs("{\"sender_recovery\":true", stdout);
+        result = remaining(&a, 0, skip);
+        puts("}");
     } else if (argc == 2 && !strcmp(op, "applied") && load(&a, NULL, 0) == 0 && object(&a, 0)) {
         double applied;
         if (numeric(args[0], &applied, 0) == 0 && volume(applied)) {

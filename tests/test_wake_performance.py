@@ -600,6 +600,7 @@ def mpd_cli():
                 str(ROOT / "speaker/src/json.c"),
                 str(ROOT / "speaker/src/json_ops.c"),
                 str(ROOT / "speaker/src/airplay.c"),
+                str(ROOT / "speaker/src/airplay_volume.c"),
                 "-o",
                 str(binary),
             ],

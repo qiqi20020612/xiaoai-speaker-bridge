@@ -94,6 +94,31 @@ dict entry(
             ],
             text=True,
         ).splitlines() == ["master\t60", "bluetooth\t50"]
+        # Same shared-mixer gain model as native/sanitized tests, with no ALSA
+        # or D-Bus access. The real firmware's audio writes remain untested.
+        sender_config = runtime / "shairport.conf"
+        sender_config.write_text(
+            "general={volume_range_db=30;volume_max_db=-4.0;};"
+            'alsa={mixer_control_name="mysoftvol";};'
+        )
+        os.utime(sender_config, (1, 1))
+        sender_target = subprocess.check_output(
+            [
+                args.qemu,
+                str(args.binary.resolve()),
+                "--airplay-volume-target",
+                str(sender_config),
+                "-6",
+                "standard",
+                "60",
+                "1",
+            ],
+            input="numid=1,iface=MIXER,name='mysoftvol'\n"
+            " ; type=INTEGER,access=rw---RW-,values=2,min=0,max=255,step=0\n"
+            " | dBscale-min=-51.00dB,step=0.20dB,mute=0\n",
+            text=True,
+        )
+        assert sender_target == "-7.00dB\n"
         profile = runtime / "profile"
         profile.write_text("")
         pcm = bytes(range(256)) * 20
