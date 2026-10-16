@@ -16,7 +16,6 @@
     "airplay_volume": false,
     "airplay_playback": false,
     "bluetooth_playback": false,
-    "announcement_ducking": false,
     "infrared": false
   }
 }

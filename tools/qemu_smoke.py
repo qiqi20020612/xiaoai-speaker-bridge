@@ -4,7 +4,9 @@
 import argparse
 import http.client
 import json
+import os
 import socket
+import struct
 import subprocess
 import tempfile
 import time
@@ -26,6 +28,33 @@ def main():
     with tempfile.TemporaryDirectory(prefix="xiaoai-qemu-") as directory:
         runtime = Path(directory)
         helper = [args.qemu, str(args.binary.resolve()), "--json-op"]
+        # Exact production parser on 32-bit ARM; values are wholly synthetic.
+        metadata = subprocess.check_output(
+            [args.qemu, str(args.binary.resolve()), "--airplay-metadata"],
+            input=b"""array [
+dict entry(
+ string "ProgressString"
+ variant string "4294957296/431000/7928000"
+)
+dict entry(
+ string "Metadata"
+ variant array [
+  dict entry(
+   string "xesam:title"
+   variant string "Synthetic ARM Song"
+  )
+  dict entry(
+   string "mpris:length"
+   variant int64 180000000
+  )
+ ]
+)
+]
+""",
+        )
+        metadata = json.loads(metadata)
+        assert metadata["song"]["title"] == "Synthetic ARM Song"
+        assert metadata["status"] == {"duration": 180, "elapsed": 10}
         quoted = subprocess.check_output(
             [*helper, "reply", 'synthetic "\\\n中文', '{"source":"mpd","uncertain":false}'],
             text=True,
@@ -75,6 +104,30 @@ def main():
         )
         assert traced.returncode == 0 and traced.stdout == pcm
         assert "phase=recording_first_output" in profile.read_text()
+        # Exercise fixed-width WAV chunk/frame accounting on 32-bit ARM too.
+        fmt = struct.pack("<HHIIHH", 1, 8, 16000, 256000, 16, 16)
+        chunks = (
+            b"JUNK"
+            + struct.pack("<I", 3)
+            + b"abc\0"
+            + b"fmt "
+            + struct.pack("<I", len(fmt))
+            + fmt
+            + b"data"
+            + struct.pack("<I", len(pcm))
+            + pcm
+        )
+        wav = b"RIFF" + struct.pack("<I", len(chunks) + 4) + b"WAVE" + chunks
+        for enabled in ("0", "1"):
+            profile.write_text("")
+            traced = subprocess.run(
+                [args.qemu, str(args.binary.resolve()), "--trace-pcm", str(profile), "77.88.2"],
+                input=wav,
+                capture_output=True,
+                env={**os.environ, "XIAOAI_PROFILE_PCM": enabled},
+            )
+            assert traced.returncode == 0 and traced.stdout == wav and not traced.stderr
+            assert ("phase=recording_first_pcm" in profile.read_text()) == (enabled == "1")
         print(
             "QEMU ARM JSON/journal/recovery/UTF-8/NUL and byte-exact opt-in trace passed; no audio hardware."
         )

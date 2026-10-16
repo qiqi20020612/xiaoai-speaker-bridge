@@ -12,6 +12,9 @@ import aiohttp
 
 from .const import DEFAULT_PORT, PROTOCOL_VERSION
 
+ARTWORK_LIMIT = 2 * 1024 * 1024
+ARTWORK_ID = re.compile(r"cover-[0-9a-f]{32}\.(?:jpg|png)")
+
 
 class BridgeError(Exception):
     """A safe, machine-readable error without device response bodies."""
@@ -101,6 +104,44 @@ class BridgeClient:
 
     async def state(self) -> dict:
         return await self.request("GET", "/api/state")
+
+    async def artwork(self, image_id: str) -> tuple[bytes | None, str | None]:
+        """Fetch only an opaque image ID through the authenticated device API."""
+        if not isinstance(image_id, str) or not ARTWORK_ID.fullmatch(image_id):
+            raise BridgeError("invalid_artwork_id")
+        try:
+            async with self._session.get(
+                self.base_url + "/api/airplay/artwork/" + image_id,
+                headers=self._headers,
+                timeout=aiohttp.ClientTimeout(total=5),
+                allow_redirects=False,
+            ) as response:
+                if response.status in (401, 403):
+                    raise AuthenticationError("auth_failed")
+                if response.status == 404:
+                    return None, None
+                if response.status != 200:
+                    raise BridgeError("artwork_unavailable")
+                mime = response.content_type
+                if mime not in ("image/jpeg", "image/png"):
+                    raise BridgeError("invalid_artwork")
+                if response.content_length and response.content_length > ARTWORK_LIMIT:
+                    raise BridgeError("response_too_large")
+                data = bytearray()
+                async for chunk in response.content.iter_chunked(16384):
+                    data.extend(chunk)
+                    if len(data) > ARTWORK_LIMIT:
+                        raise BridgeError("response_too_large")
+                if not (
+                    mime == "image/jpeg"
+                    and data.startswith(b"\xff\xd8\xff")
+                    or mime == "image/png"
+                    and data.startswith(b"\x89PNG\r\n\x1a\n")
+                ):
+                    raise BridgeError("invalid_artwork")
+                return bytes(data), mime
+        except aiohttp.ClientError, TimeoutError, OSError:
+            raise BridgeError("connection_failed") from None
 
     async def events(self, since: int) -> dict:
         return await self.request("GET", f"/api/events?since={since}", timeout=35)

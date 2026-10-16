@@ -26,9 +26,36 @@ def native_bridge(tmp_path, socket_enabled, request):
     binary.parent.mkdir()
     shutil.copy2(ROOT / "build/native/xiaoai_bridge", binary)
     adapter = ROOT / "tests/mock_adapter.py"
-    if getattr(request, "param", None):
+    parameter = getattr(request, "param", None)
+    if isinstance(parameter, dict):
+        # Only artwork HTTP tests need a different fixed allowlist root. The
+        # production binary has no runtime path override or arbitrary file API.
+        (tmp_path / "coverart").mkdir()
+        subprocess.run(
+            [
+                "cc",
+                "-D_DEFAULT_SOURCE",
+                "-D_DARWIN_C_SOURCE",
+                "-std=c11",
+                "-Os",
+                f'-DAIRPLAY_ARTWORK_DIRECTORY="{tmp_path / "coverart"}"',
+                *map(
+                    str,
+                    (
+                        ROOT / "speaker/src" / name
+                        for name in ("bridge.c", "json.c", "json_ops.c", "airplay.c")
+                    ),
+                ),
+                "-o",
+                str(binary),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        parameter = parameter["adapter"]
+    if parameter:
         adapter = tmp_path / "cleanup-adapter.py"
-        adapter.write_text(request.param)
+        adapter.write_text(parameter)
     adapter.chmod(0o755)
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))

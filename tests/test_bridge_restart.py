@@ -215,8 +215,10 @@ def test_wake_during_daemon_gap_reaches_replacement_before_probe_finishes(endpoi
         '"active_sources":["airplay"],"uncertain":false,'
         '"volumes":{"master":60,"bluetooth":60}}\\n\' "$1"\n'
     )
+    # macOS has no /proc; Linux CI keeps the real process identity read.
+    identity = "" if os.path.exists("/proc/self/stat") else "bridge_pid_start() { printf 999; }\n"
     voice_body = f""". {shlex.quote(str(endpoint.bridge / "lib/listener-hooks.sh"))}
-percent() {{ printf 60; }}
+{identity}percent() {{ printf 60; }}
 dbus_get_all() {{ return 0; }}
 amixer() {{ return 0; }}
 bridge_voice_begin || exit 71

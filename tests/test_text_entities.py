@@ -22,6 +22,60 @@ async def set_text(hass, entity_id, value):
 
 
 @pytest.mark.parametrize("kind", ["announce", "send_text"])
+async def test_text_retains_full_successful_input_until_next_submission(hass, mock_clients, kind):
+    entry, c = await setup(hass)
+    registry = er.async_get(hass)
+    text_id = registry.async_get_entity_id("text", DOMAIN, f"synthetic-speaker_{kind}_text")
+    other = "send_text" if kind == "announce" else "announce"
+    other_id = registry.async_get_entity_id("text", DOMAIN, f"synthetic-speaker_{other}_text")
+    with patch.object(c.client, "submit", AsyncMock(return_value={"status": "completed"})):
+        await set_text(hass, other_id, "另一实体的已提交文字")
+        async with asyncio.timeout(2):
+            await c.jobs.jobs[c.quick.requests[other]].done.wait()
+        for value in ('  第一行：完整文字\n第二行：引号"、emoji 👋  ', "字" * 255):
+            await set_text(hass, text_id, value)
+            assert hass.states.get(text_id).state == value
+            async with asyncio.timeout(2):
+                await c.jobs.jobs[c.quick.requests[kind]].done.wait()
+            c.async_set_updated_data(dict(c.data))
+            assert hass.states.get(text_id).state == value
+            assert hass.states.get(text_id).attributes["status"] == "completed"
+            assert hass.states.get(other_id).state == "另一实体的已提交文字"
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("kind", ["announce", "send_text"])
+async def test_text_submission_failure_preserves_last_successful_value(hass, mock_clients, kind):
+    entry, c = await setup(hass)
+    text_id = er.async_get(hass).async_get_entity_id(
+        "text", DOMAIN, f"synthetic-speaker_{kind}_text"
+    )
+    previous = "  上次成功的完整文字 👋  "
+    with patch.object(c.client, "submit", AsyncMock(return_value={"status": "completed"})):
+        await set_text(hass, text_id, previous)
+        request_id = c.quick.requests[kind]
+        async with asyncio.timeout(2):
+            await c.jobs.jobs[request_id].done.wait()
+        with patch.object(
+            c.jobs, "submit", AsyncMock(side_effect=BridgeError("queue_full"))
+        ) as submit:
+            with pytest.raises(HomeAssistantError, match="invalid_text"):
+                await set_text(hass, text_id, " \n\t")
+            submit.assert_not_called()
+            with pytest.raises(HomeAssistantError, match="queue_full"):
+                await set_text(hass, text_id, "被拒绝的新文字")
+            assert submit.call_count == 1
+        assert hass.states.get(text_id).state == previous
+        assert hass.states.get(text_id).attributes["request_id"] == request_id
+        assert not c.quick.pending
+        await set_text(hass, text_id, "下次成功的文字")
+        assert hass.states.get(text_id).state == "下次成功的文字"
+        async with asyncio.timeout(2):
+            await c.jobs.jobs[c.quick.requests[kind]].done.wait()
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("kind", ["announce", "send_text"])
 @pytest.mark.parametrize("value", ["", " \n\t", "nul\0text", "x" * 256, None, 123])
 async def test_text_rejects_invalid_input_without_submission(hass, mock_clients, kind, value):
     entry, c = await setup(hass)
@@ -97,6 +151,7 @@ async def test_text_rejects_concurrent_submission_before_service_returns(hass, m
         try:
             async with asyncio.timeout(2):
                 await entered.wait()
+            assert hass.states.get(text_id).state == ""
             with pytest.raises(HomeAssistantError, match="quick_action_busy"):
                 await set_text(hass, text_id, "second instruction")
         finally:
@@ -104,7 +159,7 @@ async def test_text_rejects_concurrent_submission_before_service_returns(hass, m
             await first
         assert submit_job.call_count == 1
         assert submit_job.call_args.args[1]["text"] == "first instruction"
-    assert hass.states.get(text_id).state == "" and not c.quick.pending
+    assert hass.states.get(text_id).state == "first instruction" and not c.quick.pending
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -127,7 +182,7 @@ async def test_text_keeps_service_errors_and_task_failure_feedback(hass, mock_cl
     state = hass.states.get(text_id)
     assert state.attributes["status"] == "failed"
     assert state.attributes["error"] == "synthetic_failure"
-    assert state.attributes["request_id"] == request_id and state.state == ""
+    assert state.attributes["request_id"] == request_id and state.state == "test"
     assert "agent_id" not in entry.options
     assert await hass.config_entries.async_unload(entry.entry_id)
 

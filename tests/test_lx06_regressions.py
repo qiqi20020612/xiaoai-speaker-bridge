@@ -145,7 +145,7 @@ def test_failed_audio_handoff_retains_and_recovers_original_duck(text_device, sp
     enable_airplay_duck_fixture(path)
     body = f'''. "{path / "bridge/lib/listener-hooks.sh"}"
 . "{path / "bridge/lib/ducking.sh"}"
-MODE=announce; DUCK_VOLUME=10; DUCK_VERIFIED=true
+MODE=announce
 bridge_duck_begin || exit 70
 if bridge_voice_begin; then exit 71;fi
 [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" ] || exit 72
@@ -699,7 +699,7 @@ printf 'string "Active"\\nvariant boolean true\\nstring "Volume"\\nvariant doubl
     )
     body = f'''. "{path / "bridge/lib/listener-hooks.sh"}"
 . "{path / "bridge/lib/ducking.sh"}"
-MODE=announce;DUCK_VOLUME=10;DUCK_VERIFIED=true
+MODE=announce
 bridge_duck_begin
 printf '%s\\n' -6 > "$STATE_DIR/sender-raw"
 printf '40\\n' > "$STATE_DIR/mixer-mysoftvol"

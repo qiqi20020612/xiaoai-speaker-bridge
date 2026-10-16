@@ -1,6 +1,6 @@
 # 协议与安全行为
 
-桥接协议 `1`、软件版本 `0.1.7`。IPv4 HTTP 默认 `8766`，随机 Bearer token 必填；配置 `0600`、持久 UUID 稳定。白名单最多 8 个 IPv4/CIDR，空数组表示允许所有可达地址；建议限制为 HA 地址。回环用于本机健康检查。HTTP 仅用于可信 LAN，部署者负责禁止公网端口映射。
+桥接协议 `1`、开发版本 `0.1.8`。IPv4 HTTP 默认 `8766`，随机 Bearer token 必填；配置 `0600`、持久 UUID 稳定。白名单最多 8 个 IPv4/CIDR，空数组表示允许所有可达地址；建议限制为 HA 地址。回环用于本机健康检查。HTTP 仅用于可信 LAN，部署者负责禁止公网端口映射。
 
 ## 设备接口
 
@@ -9,6 +9,7 @@
 | `GET /api/info` | 协议、设备 UUID、通用型号、软件版本、实际 capabilities；不返回密钥 |
 | `GET /api/state` | 更新时间、stale 标志、独立音量、真实 AirPlay/蓝牙状态、voice 来源快照、资源、instance ID |
 | `GET /api/playback` | 同一只读快照；MPD 全部业务状态由 HA 直连协议补齐 |
+| `GET /api/airplay/artwork/ID` | 认证后只读当前受限封面 ID；PNG/JPEG，最多 2 MiB；旧/缺失/不安全图片 404 |
 | `GET /api/health` | 首次成功 probe 后才 ready；未就绪时 HTTP 503 携带 `probe_status`、`probe_attempt`、`probe_running`、`startup_failed`，不回显配置 |
 | `GET /api/events?since=N` | 25 秒长轮询，返回单调 sequence；重启/较大旧游标产生 reset |
 | `POST /api/policy` | HA 当前来源/不确定状态的小快照，不在音箱运行 HA 规则引擎 |
@@ -23,9 +24,11 @@
 | `POST /api/bridge/restart` | `{}`；202 仅表示已调度，只调用 start.sh restart 并跳过 Listener；不入任务队列 |
 | `POST /api/ir` | 有限、类型校验的红外字段；需要验证标志和真实接口 |
 
-除 `/api/policy`、任务取消和 Bridge 重启外，控制请求都需要 `[A-Za-z0-9_-]{1,64}` request ID。同 ID、同接口及同请求体在最近 16 条记录窗口内返回已有状态；不同请求返回 `request_id_conflict`。音箱重启后记录消失，**不能把重发当跨重启 exactly-once**。HA 使用自己的运行期语义摘要，完成后不保留指令原文。
+除 `/api/policy`、任务取消和 Bridge 重启外，控制请求都需要 `[A-Za-z0-9_-]{1,64}` request ID。同 ID、同接口及同请求体在最近 16 条记录窗口内返回已有状态；不同请求返回 `request_id_conflict`。音箱重启后记录消失，**不能把重发当跨重启 exactly-once**。HA 任务队列使用运行期语义摘要并在完成后清空 payload；两个原生文字实体独立保留最后一次成功提交的原文。
 
 ## 有界执行
+
+AirPlay 的可选 song/status/progress/artwork_id 由现有 Probe 的同一份 RemoteControl.GetAll 回复生成；不加入原生唤醒快照，不增加 D-Bus 查询。图片只按需分段读取，HA 每设备缓存一张并沿用现有更新清理。路径、类型、失效和进度精度见 [AirPlay 元数据](airplay-metadata.md)。
 
 - 8 个 HTTP 连接，3 个 worker 槽：一个低频 probe、一个快速控制、一个播报/对话。音箱无一般任务队列。
 - 文本最大 4096 UTF-8 字节，HTTP body 最大 12287 字节，header 最大约 4 KiB；回复任务结果最大 8191 字节，超出明确失败，不伪装成功。
@@ -50,6 +53,10 @@ HA 动作包括 `announce`、`send_text`、`get_job`、`cancel_job`、`set_volum
 HA `Store` 持久保存成功确认的期望值。bridge 重启后，HA 按新 instance ID 恢复可写通道，失败则保留等待后续有界刷新。空闲稳定状态可更新持久值；录音/桥接播报期间的临时音量不被保存为新期望值。
 
 唤醒前记录活动来源集合及主/蓝牙音量。HA 选择优先级，TTS 不能覆盖快照。LX06 用每通道版本号保存本轮新期望；录音时主/蓝牙仍衰减，恢复在同一硬件音量锁内读取最新期望并应用，随后清除 voice marker，避免恢复与新指令竞争。TTS 临时音量也在相同锁内保存/恢复；取消时仍进行恢复。
+
+主动播报及有声文字回复由音箱端自动避让唯一、确定活跃的 AirPlay，master 高于 10% 时临时降到 10%，低音量不提高。使用同一套 Journal/版本恢复与 duck→voice 交接，不修改发送端音量或重复衰减原生语音。多源、任何未确认音源、无 TTS 时跳过；原 HA 避让选项与专用验证标记不再使用。旧协议数值 duck_volume 仅为过渡兼容而校验并忽略，不作为可配置目标。
+
+Probe 使用同一 Volume Lock 非阻塞采样本地 mixer 与三个 Journal 是否存在，随后释放锁再查询 DBus/BlueZ。采样时任何 Journal（包括活跃 owner）存在，volume_recovery_pending 都为 true，禁止 HA 将该快照的临时音量导入持久期望；任务在后续查询期间恢复也不能使旧样本变可信。锁忙时本次本地音量为 null、该标志为 true，能力保持，按原 Probe 周期重新观察；不等待语音或新增重试任务。
 
 AirPlay 原始 dB ≤ -144 映射静音 0%；其余钳制到 [-30,0] 并线性映射至 [0,100]。这是控制百分比，不是响度百分比；反向 0% 为 -144，其余 `0.3*percent-30`。原 Shairport 衰减曲线不变；发送端同步未实测前反向接口关闭。`all` 在 AirPlay 活跃时不写 master，能力不足时预检失败。
 

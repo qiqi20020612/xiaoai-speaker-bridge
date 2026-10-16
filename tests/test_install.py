@@ -621,13 +621,16 @@ def test_airplay_led_review_and_active_guard_are_verified_before_upgrade(install
 
 
 @pytest.mark.parametrize("failure", [None, "bridge_start", "listener_ready"])
-def test_v016_upgrade_and_recovery_keep_private_state_and_airplay_guard(installation, failure):
+@pytest.mark.parametrize("old_version", ["0.1.6", "0.1.7"])
+def test_upgrade_and_recovery_keep_private_state_and_airplay_guard(
+    installation, failure, old_version
+):
     call, data, cron, original_cron, original_boot, calls = installation
     old = data / "xiaoai_bridge"
     private_adapter(data, old / "adapter", led=True)
     review = json.loads((old / "adapter/review.json").read_text())
     assert review["format"] == 4 and review["compatibility"]["airplay_led_guard"] == 3
-    executable(old / "bin/xiaoai_bridge", "printf '0.1.6\\n'")
+    executable(old / "bin/xiaoai_bridge", f"printf '{old_version}\\n'")
     binary = (old / "bin/xiaoai_bridge").read_bytes()
     config = {
         "device_id": "synthetic-v016-stable",

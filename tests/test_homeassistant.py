@@ -164,12 +164,23 @@ async def test_options_serialization_order_validation_and_reopen(hass):
         domain=DOMAIN,
         data=DATA,
         unique_id="synthetic-speaker",
-        options={"source_priority": ["mpd", "airplay", "bluetooth"], "agent_id": "device_default"},
+        options={
+            "source_priority": ["mpd", "airplay", "bluetooth"],
+            "agent_id": "device_default",
+            "announce_ducking": False,
+            "announce_duck_volume": 75,
+        },
     )
     entry.add_to_hass(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     fields = probatio.to_field_list(result["data_schema"], custom_serializer=cv.custom_serializer)
     json.dumps(fields)
+    assert {field["name"] for field in fields} == {
+        "poll_interval",
+        "source_priority_1",
+        "source_priority_2",
+        "source_priority_3",
+    }
     assert [
         field["default"] for field in fields if field["name"].startswith("source_priority_")
     ] == ["mpd", "airplay", "bluetooth"]
@@ -190,6 +201,7 @@ async def test_options_serialization_order_validation_and_reopen(hass):
     assert saved["type"] == FlowResultType.CREATE_ENTRY
     assert entry.options["source_priority"] == ["mpd", "bluetooth", "airplay"]
     assert "agent_id" not in entry.options
+    assert "announce_ducking" not in entry.options and "announce_duck_volume" not in entry.options
     assert "source_priority_1" not in entry.options
     reopened = await hass.config_entries.options.async_init(entry.entry_id)
     fields = probatio.to_field_list(reopened["data_schema"], custom_serializer=cv.custom_serializer)

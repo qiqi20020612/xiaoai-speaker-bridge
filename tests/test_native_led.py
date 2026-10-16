@@ -321,7 +321,7 @@ def test_probe_omits_manual_led_even_with_old_flags_and_corrupt_state(native_led
     _, path, env = native_led
     config = path / "config.json"
     values = json.loads(config.read_text())
-    values["verified"] = {"led": True, "task_led": True}
+    values["verified"] = {"led": True, "task_led": True, "announcement_ducking": True}
     config.write_text(json.dumps(values))
     (path / "xiaoai_bridge.led.json").write_text("not valid JSON")
     (path / "uptime").write_text("100.00 50.00\n")
@@ -350,6 +350,7 @@ def test_probe_omits_manual_led_even_with_old_flags_and_corrupt_state(native_led
     assert result.returncode == 0, result.stderr
     response = json.loads(result.stdout)
     assert "led" not in response["capabilities"] and "led" not in response["state"]
+    assert "announcement_ducking" not in response["capabilities"]
     assert set(response["state"]["system"]) == {"memory_available", "bridge_rss", "cpu_load"}
     assert "conversation" not in response["state"]
     result = subprocess.run(

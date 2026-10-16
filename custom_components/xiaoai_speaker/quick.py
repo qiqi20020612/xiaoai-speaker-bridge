@@ -35,7 +35,7 @@ class QuickControls:
                 DOMAIN, kind, payload, blocking=True, return_response=True, context=context
             )
             self.requests[kind] = request_id
-            self.texts[kind] = ""
+            self.texts[kind] = text
             self.changed()
         finally:
             self.pending.discard(kind)

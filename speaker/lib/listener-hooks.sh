@@ -31,11 +31,21 @@ bridge_voice_begin() {
     bridge_profile wake_setup_begin
     if ! voice_busy || [ "${voice_owner:-0}" != "$$" ]; then bridge_recover_pending || return 1;fi
     BRIDGE_VOICE_VOLUME_SAVED=false
-    bridge_mark_owner "$BRIDGE_RUNTIME/xiaoai_bridge.voice" || return 1
+    # Reuse only a valid identity. A transient detection read failure must not
+    # create PID-only ownership; stop before acquiring resources if retry fails.
+    case "${voice_cycle_start-}" in
+        ''|*[!0-9]*)
+            voice_cycle_start=$(bridge_pid_start "$$" 2>/dev/null) || return 1
+            case "$voice_cycle_start" in ''|*[!0-9]*) return 1 ;; esac
+            ;;
+    esac
+    bridge_mark_owner "$BRIDGE_RUNTIME/xiaoai_bridge.voice" "${voice_cycle_start-}" || return 1
     trap 'bridge_voice_exit' HUP INT TERM
     printf '%s\n' "$XIAOAI_VOICE_CYCLE" > "$BRIDGE_RUNTIME/xiaoai_bridge.voice-cycle" || { bridge_voice_release;return 1; }
     exec 6> "$BRIDGE_RUNTIME/xiaoai_bridge.led.lock"
+    bridge_profile_detail wake_led_lock_wait
     bridge_lock_for 1 6 || { bridge_voice_release; return 1; }
+    bridge_profile_detail wake_led_lock_ready
     export XIAOAI_VOICE_LED_LOCK=1
     # Retain and remember the existing task, without a second ownership scheme.
     if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.feedback" ]; then
@@ -46,10 +56,16 @@ bridge_voice_begin() {
     [ ! -x /bin/show_led ] || /bin/show_led 1
     bridge_profile wake_led
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
+    bridge_profile_detail wake_volume_lock_wait
     bridge_lock_for 3 7 || { bridge_voice_release; return 1; }
+    bridge_profile_detail wake_volume_lock_ready
     BRIDGE_DUCK_TRANSFER=false
+    bridge_profile_detail wake_bluetooth_read_begin
     BRIDGE_BT_SAVED=$(percent bluetooth)
+    bridge_profile_detail wake_bluetooth_read_end
+    bridge_profile_detail wake_master_read_begin
     BRIDGE_MASTER_SAVED=$(percent mysoftvol)
+    bridge_profile_detail wake_master_read_end
     BRIDGE_HARDWARE_MASTER=$BRIDGE_MASTER_SAVED
     [ -n "$BRIDGE_MASTER_SAVED" ] && [ -n "$BRIDGE_BT_SAVED" ] || { flock -u 7;bridge_voice_release;return 1; }
     if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" ]; then
@@ -60,7 +76,9 @@ bridge_voice_begin() {
     [ "$BRIDGE_DUCK_TRANSFER" != true ] || handoff="$BRIDGE_RUNTIME/xiaoai_bridge.duck.json"
     # One atomic commit: neither a failed write nor an unsuccessful audio
     # reservation may discard the remote duck's recoverable baseline.
-    bridge_volume_journal "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" "$values" "$handoff" "$BRIDGE_HARDWARE_MASTER" || { flock -u 7;bridge_voice_release;return 1; }
+    bridge_profile_detail wake_journal_begin
+    bridge_volume_journal "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" "$values" "$handoff" "$BRIDGE_HARDWARE_MASTER" "${voice_cycle_start-}" || { flock -u 7;bridge_voice_release;return 1; }
+    bridge_profile_detail wake_journal_end
     BRIDGE_VOICE_VOLUME_SAVED=true
     journal_fields=$(bridge_json journal-fields "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json") || {
         flock -u 7;bridge_restore_volume;return 1;
@@ -90,12 +108,14 @@ EOF
 
 bridge_voice_attenuate() {
     exec 7> "$BRIDGE_RUNTIME/xiaoai_bridge.volume.lock"
+    bridge_profile_detail attenuation_lock_wait
     bridge_lock_for 3 7 || return 1
+    bridge_profile_detail attenuation_lock_ready
     # The original set_volume launches background amixer children outside this
     # lock. Keep the same two channels but finish both writes before recording.
     if [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" ]; then
         applied_json=$(bridge_json applied "$1" < "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json") || { flock -u 7;return 1; }
-        printf '%s' "$applied_json" | atomic_json "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" || { flock -u 7;return 1; }
+        atomic_json "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" "$applied_json" || { flock -u 7;return 1; }
     fi
     amixer sset mysoftvol "${1}%" >/dev/null 2>&1 &&
         amixer sset bluetooth "${1}%" >/dev/null 2>&1
