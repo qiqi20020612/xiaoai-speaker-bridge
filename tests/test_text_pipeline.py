@@ -57,6 +57,13 @@ fi
     # No curl mock or change to the process identity/ownership algorithm.
     bridge = tmp_path / "bridge"
     shutil.copytree(ROOT / "speaker/lib", bridge / "lib")
+    if busybox_binary:
+        # exec via PATH uses this shebang, independently of speaker_shell.
+        # Exercise the new decoder gate in firmware-like ash, not host dash.
+        playback = bridge / "lib/tts-playback.sh"
+        playback.write_text(
+            playback.read_text().replace("#!/bin/sh\n", f"#!{busybox_binary} ash\n", 1)
+        )
     pipeline = bridge / "lib/text.sh"
     pipeline.write_text(
         pipeline.read_text().replace("http://127.0.0.1/intent", ha_http.url + "/intent")
