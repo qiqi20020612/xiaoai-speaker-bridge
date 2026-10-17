@@ -6,7 +6,7 @@ Home Assistant 2026.10 自定义集成，以及 LX06 `/data` 下的轻量受控�
 
 **用户已确认 v0.1.6 在 LX06 上通过语音、TTS、上下文、音量恢复、AirPlay 并发、任务取消/去重、重启、31 分钟空闲及 8 次播报压力测试。v0.1.7 的精简与原生任务灯效仍需真机复验，自动化不替代硬件验收。** 升级、回滚和最小复验见 [v0.1.7 功能与代码精简说明](docs/lx06-v017.md)。
 
-**v0.1.8** 减少唤醒前重复解析和 helper 调用，保留实时查询、锁及恢复语义；增加默认关闭的阶段诊断、文字提交状态保留、自动 AirPlay 避让和元数据/封面显示。正式安装包见 [v0.1.8 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.1.8)。尚无 v0.1.7/v0.1.8 真机提速结论，见 [v0.1.8 测量与兼容性](docs/lx06-v018.md)。
+**v0.1.9** 修复任务取消、文字提交清空及原生历史、AirPlay 播放前避让与发送端调音恢复，并让 HA 监听开关复用原生物理静音键。正式安装包见 [v0.1.9 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.1.9)，具体行为、离线验证与待真机验收项目见 [v0.1.9 修复记录](docs/lx06-v019.md)。本版保留 v0.1.8 的语音路径优化和元数据/封面支持；尚无 v0.1.7/v0.1.8 真机提速结论，见 [v0.1.8 测量与兼容性](docs/lx06-v018.md)。
 
 ## 两端架构
 
@@ -75,7 +75,7 @@ HACS 添加本仓库为 **Integration** 自定义仓库并安装，重启 HA，�
 
 HACS 安装布局与本地 `brand/` 资源遵循 [HACS Integration 要求](https://www.hacs.xyz/docs/publish/integration/) 和 [HA 集成文件结构](https://developers.home-assistant.io/docs/creating_integration_file_structure/)。HACS 只安装 HA 端。安装包固定下载入口是 [GitHub Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases)；尚未发版的构建可从 [CI](https://github.com/qiqi20020612/xiaoai-speaker-bridge/actions/workflows/ci.yml) 获取。仅声明已测 LX06/ARM EABI5 hard-float 兼容，音箱包须由用户审阅部署。
 
-下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS` 到同一目录，执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）。`v*` tag 经全部 CI 后才创建新 Release；手动发布也重新构建、严格校验，不能覆盖已有正式/预发布或草稿。维护者发版流程见[发布说明](docs/releases.md)。当前版本附件见 [v0.1.8 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.1.8)，回退基线附件见 [v0.1.7 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.1.7)；设备部署需另行授权。
+下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS` 到同一目录，执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）。`v*` tag 经全部 CI 后才创建新 Release；手动发布也重新构建、严格校验，不能覆盖已有正式/预发布或草稿。维护者发版流程见[发布说明](docs/releases.md)。当前版本附件见 [v0.1.9 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.1.9)，回退基线附件见 [v0.1.8 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.1.8)；设备部署需另行授权。
 
 当前稳定 LX06 可从 **0.1.6 直接原地升级到 0.1.7**；保留 format=4 / hooks=4 / KWS guard=1 / AirPlay guard=3 的已审核私有副本，无需卸载、重新配对或修改旧 verified 字段。部署须在 PR 审阅和用户授权后进行，见 [v0.1.7 说明](docs/lx06-v017.md)。较早版本迁移记录见 [0.1.6](docs/lx06-v016.md) 和 [0.1.5](docs/lx06-v015.md)。
 
@@ -83,7 +83,7 @@ HACS 安装布局与本地 `brand/` 资源遵循 [HACS Integration 要求](https
 
 ## 调用示例
 
-设备页面提供两个原生文本操作控件：「播放文字」提交即调用 `announce`，「执行文字指令」提交即调用 `send_text`。v0.1.9 开发版起，成功入队后自动清空，并通过原生 `logbook.log` 将完整原文记录到对应实体的活动中；提交失败不写 Logbook，并保留未入队的有效输入，任务结束后可再次提交相同文字。历史遵循用户现有 Recorder/Logbook 保留与过滤配置，不另建存储。`speak_response` 和 `use_context` 动作参数默认 true，快捷对话直接使用默认值，不创建配置开关。原文本实体 ID 保留，旧的两个发送按钮自动移除；任务状态、request_id 和错误码显示在文本实体属性中。**文本内容可能进入 HA 服务事件、自动化、日志及历史。** 输入前阅读[隐私与 Recorder 排除](docs/acceptance-fixes.md#文本输入隐私)。主动播报和有声远程文字回复默认自动避让 AirPlay：确认只有 AirPlay 活跃时，将高于 10% 的背景主音量降至 10%，结束后按现有 Journal 恢复；v0.1.9 开发版将衰减移到合成完成后的实际解码器入口，合成期间音乐正常、原处理灯效持续，原生语音不变，适配范围与真机边界见 [v0.1.9 修复记录](docs/lx06-v019.md)。低音量、多音源或未知状态跳过衰减，无需额外开关或验证标记。任务灯效默认使用原生动画，不需要灯效配置；独立手动 RGB 灯环实体与接口已移除。
+设备页面提供两个原生文本操作控件：「播放文字」提交即调用 `announce`，「执行文字指令」提交即调用 `send_text`。v0.1.9 起，成功入队后自动清空，并通过原生 `logbook.log` 将完整原文记录到对应实体的活动中；提交失败不写 Logbook，并保留未入队的有效输入，任务结束后可再次提交相同文字。历史遵循用户现有 Recorder/Logbook 保留与过滤配置，不另建存储。`speak_response` 和 `use_context` 动作参数默认 true，快捷对话直接使用默认值，不创建配置开关。原文本实体 ID 保留，旧的两个发送按钮自动移除；任务状态、request_id 和错误码显示在文本实体属性中。**文本内容可能进入 HA 服务事件、自动化、日志及历史。** 输入前阅读[隐私与 Recorder 排除](docs/acceptance-fixes.md#文本输入隐私)。主动播报和有声远程文字回复默认自动避让 AirPlay：确认只有 AirPlay 活跃时，将高于 10% 的背景主音量降至 10%，结束后按现有 Journal 恢复；v0.1.9 将衰减移到合成完成后的实际解码器入口，合成期间音乐正常、原处理灯效持续，原生语音不变，适配范围与真机边界见 [v0.1.9 修复记录](docs/lx06-v019.md)。低音量、多音源或未知状态跳过衰减，无需额外开关或验证标记。任务灯效默认使用原生动画，不需要灯效配置；独立手动 RGB 灯环实体与接口已移除。
 
 将实体 ID 换成实际设备的 ID。主动播报和对话是不同动作：
 
