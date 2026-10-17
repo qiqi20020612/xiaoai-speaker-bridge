@@ -23,10 +23,108 @@ async def test_cancel_bridge_accepted_announcement_reaches_device(hass):
         async with asyncio.timeout(3):
             await accepted.wait()
         assert manager.executing
-        await manager.cancel(job.request_id)
+        assert (await manager.cancel(job.request_id))["status"] == "cancelled"
         client.cancel.assert_awaited_once_with(job.request_id)
         assert (await manager.wait(job, 3))["status"] == "cancelled"
         assert client.submit.await_count == 1
+    finally:
+        await manager.close()
+
+
+@pytest.mark.parametrize("status", ["cancelled", "completed", "failed"])
+async def test_cancel_device_acknowledgement_updates_response_and_result(hass, status):
+    client = AsyncMock()
+    client.cancel.return_value = {
+        "status": status,
+        "reply_text": "confirmed reply",
+        "error": "confirmed_error",
+        "source": "airplay",
+        "uncertain": False,
+        "ignored": "not part of the job result",
+    }
+    manager = JobManager(hass, client)
+    job = await manager.submit("announce", {"text": "synthetic speech"})
+    job.dispatched = True
+    job.result = {"error": "stale_error"}
+    changed = []
+    manager.on_change = lambda: changed.append((job.status, dict(job.result)))
+    try:
+        assert await manager.cancel(job.request_id) == {
+            "request_id": job.request_id,
+            "status": status,
+        }
+        expected = {
+            "reply_text": "confirmed reply",
+            "error": "confirmed_error",
+            "source": "airplay",
+            "uncertain": False,
+        }
+        assert job.status == status and job.result == expected
+        assert changed == [(status, expected)]
+        # Device acknowledgement does not claim that worker/resource cleanup ended.
+        assert manager.executing and not job.done.is_set()
+        client.cancel.assert_awaited_once_with(job.request_id)
+    finally:
+        await manager.close()
+
+
+@pytest.mark.parametrize("stage", ["submit", "job"])
+@pytest.mark.parametrize("error", [False, True])
+@pytest.mark.parametrize("status", ["cancelled", "completed", "failed"])
+async def test_cancel_confirmation_survives_older_inflight_response(hass, stage, error, status):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    client = AsyncMock()
+
+    async def old_response(*args):
+        entered.set()
+        await release.wait()
+        if error:
+            raise BridgeError("connection_failed", uncertain=True)
+        return {"status": "accepted" if stage == "submit" else "playing"}
+
+    client.submit.return_value = {"status": "accepted"}
+    getattr(client, stage).side_effect = old_response
+    client.cancel.return_value = {"status": status, "error": "confirmed_error"}
+    manager = JobManager(hass, client)
+    job = await manager.submit("send_text", {"text": "synthetic instruction"})
+    manager.start()
+    try:
+        async with asyncio.timeout(3):
+            await entered.wait()
+        assert (await manager.cancel(job.request_id))["status"] == status
+        assert job.status == status and job.result == {"error": "confirmed_error"}
+        assert not job.done.is_set() and manager.executing
+        release.set()
+        async with asyncio.timeout(3):
+            await job.done.wait()
+        assert job.status == status and job.result == {"error": "confirmed_error"}
+        assert job.payload == {} and not manager.executing
+        assert client.submit.await_count == 1
+        assert client.job.await_count == (1 if stage == "job" else 0)
+        client.cancel.assert_awaited_once_with(job.request_id)
+    finally:
+        release.set()
+        await manager.close()
+
+
+async def test_cancel_confirmation_is_not_replaced_by_poll_timeout(hass, monkeypatch):
+    accepted = asyncio.Event()
+    client = AsyncMock()
+    client.submit.return_value = {"status": "accepted"}
+    client.cancel.return_value = {"status": "cancelled"}
+    monkeypatch.setattr("custom_components.xiaoai_speaker.jobs.JOB_TIMEOUT", 0.01)
+    manager = JobManager(hass, client)
+    job = await manager.submit("announce", {"text": "synthetic speech"})
+    manager.on_change = lambda: accepted.set() if job.status == "accepted" else None
+    manager.start()
+    try:
+        async with asyncio.timeout(3):
+            await accepted.wait()
+        assert (await manager.cancel(job.request_id))["status"] == "cancelled"
+        assert (await manager.wait(job, 3))["status"] == "cancelled"
+        assert job.result == {}
+        client.job.assert_not_awaited()
     finally:
         await manager.close()
 

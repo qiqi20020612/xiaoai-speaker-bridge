@@ -234,7 +234,8 @@ async def test_ha_cancel_stops_real_provider_chain_and_preserves_context(
             saved_context = context.read_bytes() if kind == "send_text" else None
             before = (path / "provider-requests").read_bytes()
             assert (await client.job(job.request_id))["status"] in ("synthesizing", "playing")
-            await manager.cancel(job.request_id)
+            assert (await manager.cancel(job.request_id))["status"] == "cancelled"
+            assert job.status == "cancelled"
             assert (await manager.wait(job, 8))["status"] == "cancelled"
             (path / "synthesis-released").touch()
             await wait_async(lambda: not call("/api/state")[1]["audio_active"])
