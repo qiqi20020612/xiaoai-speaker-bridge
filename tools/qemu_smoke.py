@@ -94,6 +94,31 @@ dict entry(
             ],
             text=True,
         ).splitlines() == ["master\t60", "bluetooth\t50"]
+        # Same shared-mixer gain model as native/sanitized tests, with no ALSA
+        # or D-Bus access. The real firmware's audio writes remain untested.
+        sender_config = runtime / "shairport.conf"
+        sender_config.write_text(
+            "general={volume_range_db=30;volume_max_db=-4.0;};"
+            'alsa={mixer_control_name="mysoftvol";};'
+        )
+        os.utime(sender_config, (1, 1))
+        sender_target = subprocess.check_output(
+            [
+                args.qemu,
+                str(args.binary.resolve()),
+                "--airplay-volume-target",
+                str(sender_config),
+                "-6",
+                "standard",
+                "60",
+                "1",
+            ],
+            input="numid=1,iface=MIXER,name='mysoftvol'\n"
+            " ; type=INTEGER,access=rw---RW-,values=2,min=0,max=255,step=0\n"
+            " | dBscale-min=-51.00dB,step=0.20dB,mute=0\n",
+            text=True,
+        )
+        assert sender_target == "-7.00dB\n"
         profile = runtime / "profile"
         profile.write_text("")
         pcm = bytes(range(256)) * 20
@@ -131,6 +156,26 @@ dict entry(
         print(
             "QEMU ARM JSON/journal/recovery/UTF-8/NUL and byte-exact opt-in trace passed; no audio hardware."
         )
+        recovery = runtime / "recovery"
+        (recovery / "lib").mkdir(parents=True)
+        recovery_script = recovery / "lib/volume-recovery.sh"
+        recovery_marker = runtime / "recovery-started"
+        recovery_script.write_text(
+            "#!/usr/bin/env python3\nimport os\nfrom pathlib import Path\n"
+            "assert os.getsid(0)==os.getpid()==os.getpgrp()\n"
+            f"Path({str(recovery_marker)!r}).write_text('detached')\n"
+        )
+        recovery_script.chmod(0o700)
+        subprocess.run(
+            [args.qemu, str(args.binary.resolve()), "--schedule-recovery", str(recovery)],
+            check=True,
+            timeout=5,
+        )
+        deadline = time.monotonic() + 5
+        while not recovery_marker.exists():
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        assert recovery_marker.read_text() == "detached"
         config = runtime / "config.json"
         config.write_text(
             json.dumps(
@@ -205,8 +250,18 @@ dict entry(
                 ]
                 == "completed"
             )
+            assert (
+                call("/api/tts/announce", {"request_id": "qemu-cancel", "text": "synthetic"})[0]
+                == 202
+            )
+            assert call("/api/jobs/qemu-cancel/cancel", {})[1]["status"] == "cancelled"
+            deadline = time.monotonic() + 5
+            while call("/api/state")[1]["audio_active"]:
+                assert time.monotonic() < deadline
+                time.sleep(0.12)
+            assert call("/api/jobs/qemu-cancel")[1]["status"] == "cancelled"
             print(
-                f"QEMU ARM {info['version']}: config, authenticated HTTP, state, worker and idempotency passed; hardware remains untested."
+                f"QEMU ARM {info['version']}: config, HTTP, state, worker, idempotency, cancellation and detached recovery passed; hardware remains untested."
             )
         finally:
             proc.terminate()

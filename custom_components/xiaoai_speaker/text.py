@@ -1,4 +1,4 @@
-"""Native inputs for non-sensitive instructions: HA may record their states/events."""
+"""Native inputs; accepted instructions are cleared and logged through HA."""
 
 from homeassistant.components.text import TextEntity
 from homeassistant.exceptions import HomeAssistantError

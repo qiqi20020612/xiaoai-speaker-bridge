@@ -28,6 +28,7 @@ class Job:
     digest: str = field(default="", compare=False)
     context_id: str | None = field(default=None, compare=False)
     text_digest: str = field(default="", compare=False)
+    dispatched: bool = field(default=False, compare=False)
 
 
 class JobManager:
@@ -60,7 +61,10 @@ class JobManager:
 
     @property
     def executing(self) -> bool:
-        return any(not job.done.is_set() and job.status != "accepted" for job in self.jobs.values())
+        return any(
+            not job.done.is_set() and (job.dispatched or job.status != "accepted")
+            for job in self.jobs.values()
+        )
 
     def start(self) -> None:
         self._worker = self.hass.async_create_background_task(self._run(), "XiaoAI job queue")
@@ -149,12 +153,20 @@ class JobManager:
             raise BridgeError("job_not_found")
         if job.done.is_set():
             return {"request_id": request_id, "status": job.status}
-        if job.status == "accepted":
+        # Bridge also returns "accepted" after dispatch. Only work that cannot
+        # have reached the device may be cancelled exclusively in the HA queue.
+        if not job.dispatched:
             job.status = "cancelled"
             job.done.set()
             self._active_text.discard(job.text_digest)
         else:
-            await self.client.cancel(request_id)
+            state = await self.client.cancel(request_id)
+            job.status = state.get("status", job.status)
+            job.result = {
+                k: v
+                for k, v in state.items()
+                if k in ("reply_text", "error", "source", "uncertain")
+            }
         self._changed()
         return {"request_id": request_id, "status": job.status}
 
@@ -162,14 +174,20 @@ class JobManager:
         deadline = time.monotonic() + JOB_TIMEOUT
         accepted = False
         while time.monotonic() < deadline:
-            if job.status == "cancelled":
+            if job.status in ("cancelled", "completed", "failed"):
                 return
             try:
                 if not accepted:
+                    # An in-flight/lost response may already have started TTS.
+                    job.dispatched = True
                     state = await self.client.submit(job.kind, job.payload)
                     accepted = True
                 else:
                     state = await self.client.job(job.request_id)
+                # A concurrent cancel may confirm the terminal device state
+                # while this older submit/poll response is still in flight.
+                if job.status in ("cancelled", "completed", "failed"):
+                    return
                 job.status = state.get("status", "running")
                 job.result = {
                     k: v
@@ -180,7 +198,10 @@ class JobManager:
                 if job.status in TERMINAL:
                     return
             except BridgeError as err:
+                if job.status in ("cancelled", "completed", "failed"):
+                    return
                 if err.code == "busy" and not accepted:
+                    job.dispatched = False  # Explicit refusal: nothing was started.
                     await asyncio.sleep(1)
                     continue
                 if err.uncertain:
@@ -192,6 +213,8 @@ class JobManager:
                 else:
                     raise
             await asyncio.sleep(0.5)
+        if job.status in ("cancelled", "completed", "failed"):
+            return
         job.status = "unknown" if accepted else "failed"
         job.result = {"error": "job_timeout"}
 

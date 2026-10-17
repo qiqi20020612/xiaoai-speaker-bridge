@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "airplay.h"
+#include "airplay_volume.h"
 #include "json.h"
 #include "json_ops.h"
 #include <arpa/inet.h>
@@ -23,7 +24,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define VERSION "0.1.8"
+#define VERSION "0.1.9"
 #define CLIENTS 8
 #define BODY 12288
 #define OUTPUT 32768
@@ -399,6 +400,68 @@ static void job_json(int j, char *out, size_t cap) {
     snprintf(out, cap, "{\"request_id\":%s,\"status\":%s%s%.*s}", qid, qstatus, n > 2 ? "," : "",
              n > 2 ? (int)n - 2 : 0, n > 2 ? result + 1 : "");
 }
+static void terminate_worker(struct worker *w, double grace) {
+    if (w->kill_at)
+        return;
+    w->kill_at = monotime() + grace;
+    kill(-w->pid, SIGTERM);
+}
+static pid_t reap_worker(struct worker *w, int *status) {
+    if (w->kill_at) {
+        siginfo_t ended = {0};
+        /* Keep the exited leader's PID reserved until its remaining group is
+         * stopped. Reaping first could both orphan TTS and recycle the PID. */
+        if (waitid(P_PID, (id_t)w->pid, &ended, WEXITED | WNOHANG | WNOWAIT) < 0 ||
+            ended.si_pid != w->pid)
+            return 0;
+        kill(-w->pid, SIGKILL);
+    }
+    return waitpid(w->pid, status, WNOHANG);
+}
+static int schedule_recovery(const char *directory) {
+    char script[1024];
+    int n = snprintf(script, sizeof script, "%s/lib/volume-recovery.sh", directory);
+    if (directory[0] != '/' || n < 0 || (size_t)n >= sizeof script)
+        return 2;
+    int ready[2];
+    if (pipe(ready) < 0)
+        return 1;
+    if (fcntl(ready[1], F_SETFD, FD_CLOEXEC) < 0) {
+        close(ready[0]);
+        close(ready[1]);
+        return 1;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(ready[0]);
+        close(ready[1]);
+        return 1;
+    }
+    if (pid == 0) {
+        close(ready[0]);
+        if (setsid() >= 0)
+            execl(script, script, "recover", (char *)NULL);
+        char failed = 1;
+        ssize_t ignored = write(ready[1], &failed, 1);
+        (void)ignored;
+        _exit(127);
+    }
+    close(ready[1]);
+    char failed;
+    ssize_t result;
+    do {
+        result = read(ready[0], &failed, 1);
+    } while (result < 0 && errno == EINTR);
+    close(ready[0]);
+    /* EOF proves exec closed the pipe after setsid. The existing one-shot
+     * recovery can now outlive cancellation without inheriting task locks. */
+    if (result == 0)
+        return 0;
+    if (result > 0)
+        waitpid(pid, NULL, 0);
+    return 1;
+}
+static void read_worker(int k);
 static int worker_spawn(int kind, int owner, int job, const char *operation, const char *payload) {
     int slot = -1;
     for (int k = 0; k < WORKERS; k++)
@@ -439,6 +502,10 @@ static int worker_spawn(int kind, int owner, int job, const char *operation, con
         return -1;
     }
     if (pid == 0) {
+        signal(SIGTERM, SIG_DFL);
+        signal(SIGINT, SIG_DFL);
+        if (stopping)
+            _exit(143);
         setpgid(0, 0);
         dup2(input[0], STDIN_FILENO);
         dup2(output[1], STDOUT_FILENO);
@@ -501,8 +568,7 @@ static int worker_spawn(int kind, int owner, int job, const char *operation, con
                                                               : kind == 0 ? PROBE_TIMEOUT
                                                                           : 15)};
     if (at < length) {
-        kill(-pid, SIGTERM);
-        workers[slot].kill_at = monotime() + 2;
+        terminate_worker(&workers[slot], 2);
     }
     if (owner >= 0)
         conn[owner].pending = 1;
@@ -792,15 +858,22 @@ static void dispatch(int i, char *method, char *path, char *body) {
             error(i, 404, "job_not_found");
             return;
         }
-        if (jobs[j].active && strcmp(jobs[j].kind, "send_text") == 0) {
+        /* Observe an already-written TTS stage even when this HTTP request and
+         * the worker pipe became readable in the same poll iteration. */
+        if (jobs[j].active)
+            for (int k = 0; k < WORKERS; k++)
+                if (workers[k].pid && workers[k].kind == 2 && workers[k].job == j)
+                    read_worker(k);
+        if (jobs[j].active && strcmp(jobs[j].kind, "send_text") == 0 &&
+            strcmp(jobs[j].status, "synthesizing") && strcmp(jobs[j].status, "playing") &&
+            strcmp(jobs[j].status, "cancelled")) {
             error(i, 409, "cannot_cancel_running_conversation");
             return;
         }
         if (jobs[j].active)
             for (int k = 0; k < WORKERS; k++)
                 if (workers[k].pid && workers[k].kind == 2 && workers[k].job == j) {
-                    kill(-workers[k].pid, SIGTERM);
-                    workers[k].kill_at = monotime() + CLEANUP_GRACE;
+                    terminate_worker(&workers[k], CLEANUP_GRACE);
                     strcpy(jobs[j].status, "cancelled");
                 }
         job_json(j, out, sizeof out);
@@ -1145,8 +1218,7 @@ static void read_worker(int k) {
         }
         if (w->used >= sizeof w->output - 1) {
             w->overflow = 1;
-            kill(-w->pid, SIGTERM);
-            w->kill_at = monotime() + 2;
+            terminate_worker(w, 2);
         }
     } else if (n == 0) {
         close(w->fd);
@@ -1167,8 +1239,7 @@ static void read_local(void) {
         for (int k = 0; k < WORKERS; k++) {
             if (workers[k].pid && workers[k].kind == 2 &&
                 strcmp(jobs[workers[k].job].kind, "announce") == 0) {
-                kill(-workers[k].pid, SIGTERM);
-                workers[k].kill_at = monotime() + CLEANUP_GRACE;
+                terminate_worker(&workers[k], CLEANUP_GRACE);
                 strcpy(jobs[workers[k].job].status, "cancelled");
                 strcpy(jobs[workers[k].job].result, "{\"error\":\"voice_preempted\"}");
             }
@@ -1376,13 +1447,12 @@ static int server(void) {
                         probe_status = "probe_timeout";
                         diagnostic("probe_deadline_exceeded", PROBE_TIMEOUT);
                     }
-                    kill(-workers[k].pid, SIGTERM);
-                    workers[k].kill_at = now + (workers[k].kind == 2 ? CLEANUP_GRACE : 5);
+                    terminate_worker(&workers[k], workers[k].kind == 2 ? CLEANUP_GRACE : 5);
                 }
                 if (workers[k].kill_at && now > workers[k].kill_at)
                     kill(-workers[k].pid, SIGKILL);
                 int status;
-                pid_t done = waitpid(workers[k].pid, &status, WNOHANG);
+                pid_t done = reap_worker(&workers[k], &status);
                 if (done == workers[k].pid) {
                     while (1) {
                         size_t before = workers[k].used;
@@ -1447,16 +1517,18 @@ static int server(void) {
         close_conn(i);
     for (int k = 0; k < WORKERS; k++)
         if (workers[k].pid)
-            kill(-workers[k].pid, SIGTERM);
+            terminate_worker(&workers[k], CLEANUP_GRACE);
     double deadline = monotime() + CLEANUP_GRACE;
     for (int k = 0; k < WORKERS; k++)
         if (workers[k].pid) {
             int status;
-            while (waitpid(workers[k].pid, &status, WNOHANG) == 0 && monotime() < deadline) {
+            pid_t done;
+            double until = workers[k].kill_at < deadline ? workers[k].kill_at : deadline;
+            while ((done = reap_worker(&workers[k], &status)) == 0 && monotime() < until) {
                 struct timespec pause = {0, 100000000};
                 nanosleep(&pause, NULL);
             }
-            if (waitpid(workers[k].pid, &status, WNOHANG) == 0) {
+            if (done == 0) {
                 kill(-workers[k].pid, SIGKILL);
                 waitpid(workers[k].pid, &status, 0);
             }
@@ -1628,6 +1700,10 @@ static int mpd_state(void) {
     return 0;
 }
 int main(int argc, char **argv) {
+    if (argc == 7 && strcmp(argv[1], "--airplay-volume-target") == 0)
+        return bridge_airplay_volume_target(argv[2], argv[3], argv[4], argv[5], argv[6]);
+    if (argc == 3 && strcmp(argv[1], "--schedule-recovery") == 0)
+        return schedule_recovery(argv[2]);
     if (argc == 2 && strcmp(argv[1], "--airplay-metadata") == 0)
         return bridge_airplay_metadata();
     if (argc == 2 && strcmp(argv[1], "--version") == 0) {

@@ -264,6 +264,7 @@ def artwork_cli(tmp_path_factory):
             str(ROOT / "speaker/src/json.c"),
             str(ROOT / "speaker/src/json_ops.c"),
             str(ROOT / "speaker/src/airplay.c"),
+            str(ROOT / "speaker/src/airplay_volume.c"),
             str(ROOT / "tests/json_ops_cli.c"),
             "-o",
             str(binary),

@@ -156,7 +156,7 @@ case "$1" in
         action=$(request_value '.action')
         case "$action" in start|stop|restart) ;; *) fail unsupported_action ;; esac
         voice_busy && fail busy
-        "$BRIDGE_DIR/lib/listener-service.sh" "$action" >/dev/null 2>&1 || fail listener_control_failed
+        "$BRIDGE_DIR/lib/listener-service.sh" "$action" user >/dev/null 2>&1 || fail listener_control_failed
         printf '{"completed":true}\n'
         ;;
     reset_context)

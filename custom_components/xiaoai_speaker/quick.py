@@ -1,10 +1,13 @@
 """Volatile convenience inputs; send exclusively through the registered services."""
 
+import logging
 import uuid
 
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class QuickControls:
@@ -34,8 +37,34 @@ class QuickControls:
             await self.coordinator.hass.services.async_call(
                 DOMAIN, kind, payload, blocking=True, return_response=True, context=context
             )
-            self.requests[kind] = request_id
+        except HomeAssistantError:
+            # Preserve the unqueued input for retry; no submission is logged.
             self.texts[kind] = text
             self.changed()
+            raise
+        else:
+            self.requests[kind] = request_id
+            self.texts[kind] = ""
+            self.changed()
+            hass = self.coordinator.hass
+            if hass.services.has_service("logbook", "log"):
+                state = hass.states.get(entity_id)
+                try:
+                    await hass.services.async_call(
+                        "logbook",
+                        "log",
+                        {
+                            "name": state.name if state is not None else entity_id,
+                            "message": text,
+                            "entity_id": entity_id,
+                            "domain": "text",
+                        },
+                        blocking=True,
+                        context=context,
+                    )
+                except HomeAssistantError:
+                    # The task is already queued. Reporting submission failure
+                    # here could prompt a duplicate instruction.
+                    _LOGGER.warning("Task %s queued, but its Logbook entry failed", request_id)
         finally:
             self.pending.discard(kind)

@@ -135,6 +135,60 @@ async def test_services_require_a_target_and_keep_announcement_separate(hass, mo
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+@pytest.mark.parametrize("kind", ["announce", "send_text"])
+async def test_cancel_service_returns_device_confirmation_before_old_poll(hass, mock_clients, kind):
+    entry = MockConfigEntry(
+        domain=DOMAIN, title="Synthetic speaker", data=DATA, unique_id="synthetic-speaker"
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = entry.runtime_data.coordinator
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def old_poll(*args):
+        entered.set()
+        await release.wait()
+        return {"status": "running"}
+
+    try:
+        with (
+            patch.object(
+                coordinator.client, "submit", AsyncMock(return_value={"status": "accepted"})
+            ) as submit,
+            patch.object(coordinator.client, "job", side_effect=old_poll),
+            patch.object(
+                coordinator.client, "cancel", AsyncMock(return_value={"status": "cancelled"})
+            ) as cancel,
+        ):
+            job = await coordinator.jobs.submit(kind, {"text": "synthetic speech"})
+            async with asyncio.timeout(3):
+                await entered.wait()
+            target = {
+                "entity_id": "media_player.synthetic_speaker",
+                "request_id": job.request_id,
+            }
+            response = await hass.services.async_call(
+                DOMAIN, "cancel_job", target, blocking=True, return_response=True
+            )
+            assert response == {"request_id": job.request_id, "status": "cancelled"}
+            assert (
+                await hass.services.async_call(
+                    DOMAIN, "get_job", target, blocking=True, return_response=True
+                )
+                == response
+            )
+            assert coordinator.jobs.executing and not job.done.is_set()
+            cancel.assert_awaited_once_with(job.request_id)
+            release.set()
+            assert (await coordinator.jobs.wait(job, 3))["status"] == "cancelled"
+            assert submit.await_count == 1
+    finally:
+        release.set()
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_options_have_only_retained_configuration(hass, mock_clients):
     entry = MockConfigEntry(
         domain=DOMAIN, title="Synthetic speaker", data=DATA, unique_id="synthetic-speaker"

@@ -34,9 +34,16 @@ EOF
       recovery_failed=false
       while read -r recovery_channel recovery_value; do
         [ -n "$recovery_channel" ] || continue
-        if [ "$recovery_value" = pending ]; then recovery_failed=true;continue;fi
-        recovery_mixer=$(mixer_name "$recovery_channel") || exit 1
-        if ! amixer sset "$recovery_mixer" "${recovery_value}%" >/dev/null 2>&1; then recovery_failed=true;continue;fi
+        if [ "$recovery_value" = pending ]; then
+            if [ "$recovery_channel" != master ] || [ ! -r "$BRIDGE_DIR/lib/sender-recovery.sh" ]; then
+                recovery_failed=true;continue
+            fi
+            . "$BRIDGE_DIR/lib/sender-recovery.sh"
+            bridge_sender_restore "$recovery_file" "$recovery_ap" "$recovery_raw" "$recovery_active" || { recovery_failed=true;continue; }
+        else
+            recovery_mixer=$(mixer_name "$recovery_channel") || exit 1
+            if ! amixer sset "$recovery_mixer" "${recovery_value}%" >/dev/null 2>&1; then recovery_failed=true;continue;fi
+        fi
         if [ "${2:-}" != keep ]; then
             recovery_update=$(bridge_json drop-channel "$recovery_channel" < "$recovery_file") || exit 1
             atomic_json "$recovery_file" "$recovery_update" || exit 1
@@ -99,8 +106,10 @@ bridge_recovery_schedule() {
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.voice-volume.json" ] ||
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.duck.json" ] ||
     [ -r "$BRIDGE_RUNTIME/xiaoai_bridge.tts-volume.json" ] || return 0
-    "$BRIDGE_DIR/lib/volume-recovery.sh" recover 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- \
-        </dev/null >/dev/null 2>&1 &
+    # Wait only for the existing recovery script to exec in its own session.
+    # Cancelled workers can then stop every remaining TTS descendant safely.
+    "$BRIDGE_JSON_BIN" --schedule-recovery "$BRIDGE_DIR" 3>&- 4>&- 5>&- 6>&- 7>&- 8>&- 9>&- \
+        </dev/null >/dev/null 2>&1
 }
 
 if [ "${0##*/}" = volume-recovery.sh ]; then

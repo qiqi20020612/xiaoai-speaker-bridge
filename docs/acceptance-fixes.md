@@ -25,7 +25,9 @@ v0.1.7 移除独立灯光实体及颜色 API。HA 排队中的任务不抢灯；
 
 ## 音乐避让
 
-主动播报和有声远程文字回复在非空 TTS 前自动检查实时音源快照。只有 AirPlay 明确活跃、Bluetooth/MPD 明确不活跃且无冲突时，才把高于 10% 的 mysoftvol 降至原生唤醒默认的 10% 目标；它是绝对值，原音量更低时不提高，也不叠乘衰减。只改背景 master，不改 AirPlay 发送端或独立 notifyvol。较低优先级音源未知时也跳过，不能只看 uncertain=false；非关键探测失败不阻断 TTS。静默文字指令和空回复不衰减，原生语音继续使用已经持有的语音 Journal，不再额外避让。
+主动播报和有声远程文字回复默认自动避让。v0.1.9 将检查与衰减从 TTS 调用前移到实际解码器入口：LLM、合成及回退合成期间不压低背景音乐，原生处理灯效继续显示；播放前同步完成实时音源检查、锁、Journal 和衰减，再把原参数与音频交给解码器，播放结束即恢复。只有 AirPlay 明确活跃、Bluetooth/MPD 明确不活跃且无冲突时，才把高于 10% 的 mysoftvol 降至原生唤醒默认的 10% 目标；它是绝对值，原音量更低时不提高，也不叠乘衰减。只改背景 master，不改 AirPlay 发送端或独立 notifyvol。较低优先级音源未知时也跳过，不能只看 uncertain=false；非关键探测失败不阻断 TTS。静默文字指令和空回复不衰减，原生语音继续使用已经持有的语音 Journal，不安装这个任务播放器入口。
+
+入口仅覆盖本次 HA 任务 PATH 中的 mpg123/ogg123/aplay，以及通过 PATH 调用它们的 miplay；原 TTS 和 miplay 文件不改写，不缓冲或转码音频，也不根据后台播放器轮询追赶衰减。音量读取、Journal 或锁失败时不启动解码器，不因该安全错误触发提供方回退；真实解码失败仍保留原回退链。用户自定义脚本若重置 PATH 或绝对调用解码器，不在本入口覆盖范围内，不能声称已避让；LX06 播放器实际调用、首字听感及开销仍待实机验证，见 [v0.1.9 修复记录](lx06-v019.md)。
 
 音源快照与锁内 Journal 保留各自的 AirPlay 查询时刻。后一次查询失败、停止或缺少有效发送端音量时，删除尚未应用的本次记录并跳过衰减；不以较早观测替代恢复基线。恢复仍待处理时，HA 利用现有 volume_recovery_pending 状态暂停导入硬件音量，避免把临时 10% 保存成新的期望值。
 
@@ -33,13 +35,13 @@ Probe 在短暂的非阻塞 Volume Lock 内关联 mixer 读数与任一 Journal 
 
 HA 不再显示避让开关和上限，加载配置条目时只清理 announce_ducking/announce_duck_volume 旧选项，保留其他配置。音箱示例和 probe 删除专用验证标记/能力；旧配置中残留的 verified.announcement_ducking 不参与判断。协议 1 保持，旧端在过渡期间发送的合法数值 duck_volume 仍通过类型校验但被忽略，不能改变固定衰减目标。先更新音箱端再更新 HA；新 HA 连接旧音箱时原播报/对话继续可用，自动避让需新版音箱端。
 
-复用原语音的 bridge_volume_journal / bridge_volume_recover_locked、通道版本与音量锁。取消、TTS 失败、超时的 TERM 清理恢复原值或用户新目标。独立 duck Journal 保留语音抢占所需的原始基线，在 volume.lock 下移交给 listener；旧任务不把衰减值当原值，也不覆盖录音期衰减。恢复锁/混音器失败保留 /tmp 恢复记录，释放音频/语音/LED 所有权后有界重试，下一次安全操作也重试。发送端目标已改变时不回写旧 master；若当前值仍为衰减值、无法确认发送端新目标，保留 Journal 待明确目标解决，不猜测映射。/tmp 掉电丢失、实际路由、听感及共享控件竞态仍需真机验收。
+复用原语音的 bridge_volume_journal / bridge_volume_recover_locked、通道版本与音量锁。取消、TTS 失败、超时的 TERM 清理恢复原值或用户新目标。独立 duck Journal 保留语音抢占所需的原始基线，在 volume.lock 下移交给 listener；旧任务不把衰减值当原值，也不覆盖录音期衰减。恢复锁/混音器失败保留 /tmp 恢复记录，释放音频/语音/LED 所有权后有界重试，下一次安全操作也重试。发送端目标已改变时不回写旧 master。v0.1.9 对仍等于 cap 的 Duck PENDING 增加受限恢复：只有验证了运行中 Shairport 的已加载配置、实际 ALSA dB TLV 和目标曲线，才按当前 raw 恢复共享 mixer，并复查发送端已应用该值；持续变化/失败保留恢复标志，HA 新版本仍优先。不能确认目标时保留原 PENDING，不猜测映射或回发旧 raw，详见 [v0.1.9 修复记录](lx06-v019.md#发送端调音后-duck-卡在-pending)。/tmp 掉电丢失、实际路由、听感及共享控件竞态仍需真机验收。
 
 ## 文本输入隐私
 
-原生 text 操作仅用于非敏感内容，最多 255 个字符，这是 HA State Machine 的限制；较长文本仍使用原服务（4096 字节）。「播放文字」提交即调用 `xiaoai_speaker.announce`，「执行文字指令」提交即调用 `xiaoai_speaker.send_text`，不需要独立发送按钮。成功入队后各自保留完整原文，下一次成功提交时更新；提交失败不覆盖原状态，任务结束后可以再次提交相同文字。后续任务失败仍保留已提交文字，由原有 status/error 属性反馈；空白、NUL 和超长输入继续拒绝。快捷文字对话使用原服务 speak_response=true、use_context=true 默认值；两个独立开关和其内存状态已删除。交互参考 [Xiaomi Miot 的 TextEntity 动作设计](https://github.com/al-one/hass-xiaomi-miot/blob/master/custom_components/xiaomi_miot/text.py)，执行仍通过本集成原有服务与队列。
+原生 text 操作仅用于非敏感内容，最多 255 个字符，这是 HA State Machine 的限制；较长文本仍使用原服务（4096 字节）。「播放文字」提交即调用 `xiaoai_speaker.announce`，「执行文字指令」提交即调用 `xiaoai_speaker.send_text`，不需要独立发送按钮。v0.1.9 起成功入队后自动清空，通过 HA 原生 `logbook.log` 将完整原文关联到对应实体；记录表示成功提交，不表示音箱任务已经完成。提交失败不写 Logbook，并在现有内存输入字段中保留未入队的有效文字；正在提交或仍有未完成任务时继续拒绝重复发送。任务结束后可以再次提交相同文字，每次成功提交单独记录。后续任务失败仍由原有 status/error/request_id 属性反馈，不另写一次提交记录；空白、NUL 和超长输入继续拒绝。快捷文字对话使用原服务 speak_response=true、use_context=true 默认值；两个独立开关和其内存状态已删除。
 
-实体在当前集成运行期间保留最后一次成功提交的原文；提交值经过 HA 服务，可能进入服务事件、自动化、日志和历史。输入使用 Password 模式也不能把这些渠道变成安全存储。集成诊断不导出输入、回复或 token。
+Logbook 使用实际 Entity ID（含用户改名）、实体名称和原服务上下文，message 保留空白、换行和完整原文。由 HA 原生 Recorder/Logbook 持久化、过滤和清理，集成不另建历史数据库或保留已提交文本。Logbook 未启用时不强制启动 Recorder/Logbook；写入服务异常仅记录不含原文的警告，不把已经入队的任务误报失败或重新提交。提交值及未入队的输入状态也可能进入 HA 服务事件、自动化、日志和历史；输入使用 Password 模式不能把这些渠道变成安全存储。集成诊断不导出输入、回复或 token。
 
 在输入前配置 Recorder 排除**实际的两个 text Entity ID**，例如：
 
@@ -51,7 +53,7 @@ recorder:
       - text.your_speaker_execute_text_directive
 ```
 
-排除状态不能保证服务事件、日志、外部自动化或已有历史均无文本。敏感任务应关闭/不使用这些输入，并按自己的 HA 数据保留策略处理已有历史。更长/敏感输入使用原服务也不获得“不留痕”保证。
+Recorder 按实际 Entity ID 排除时，也会过滤关联的 Logbook 条目；仅使用 Logbook 展示过滤不等于阻止 Recorder 入库，实体定向查询遵循 HA 原生规则。排除实体不能保证服务事件、日志、外部自动化或已有历史均无文本。敏感任务应关闭/不使用这些输入，并按自己的 HA 数据保留策略处理已有历史。更长/敏感输入使用原服务也不获得“不留痕”保证。
 
 ## 实体迁移
 

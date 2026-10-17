@@ -2,6 +2,7 @@
 #include "../speaker/src/json_ops.h"
 #ifdef XIAOAI_TEST_AIRPLAY
 #include "../speaker/src/airplay.h"
+#include "../speaker/src/airplay_volume.h"
 #include <stdio.h>
 #include <unistd.h>
 #endif
@@ -9,6 +10,8 @@
 
 int main(int argc, char **argv) {
 #ifdef XIAOAI_TEST_AIRPLAY
+    if (argc == 7 && !strcmp(argv[1], "--airplay-volume-target"))
+        return bridge_airplay_volume_target(argv[2], argv[3], argv[4], argv[5], argv[6]);
     if (argc == 2 && !strcmp(argv[1], "--airplay-metadata"))
         return bridge_airplay_metadata();
     if (argc == 4 && !strcmp(argv[1], "--test-artwork")) {

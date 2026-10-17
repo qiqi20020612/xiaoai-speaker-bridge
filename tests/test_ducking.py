@@ -148,7 +148,7 @@ def test_legacy_device_verification_flag_does_not_control_automatic_duck(text_de
 
 
 @pytest.mark.parametrize("failure", ["read", "journal", "owner", "attenuate"])
-def test_duck_preparation_failure_never_starts_tts(text_device, speaker_shell, failure):
+def test_duck_preparation_failure_never_starts_playback(text_device, speaker_shell, failure):
     _, path, env = text_device
     enable_airplay_duck_fixture(path)
     mixer = path / "tools/amixer"
@@ -189,19 +189,28 @@ def test_duck_preparation_failure_never_starts_tts(text_device, speaker_shell, f
         "read": "volume_unknown",
         "attenuate": "hardware_control_failed",
     }.get(failure, "state_write_failed")
-    assert not (path / "tts-calls").exists()
+    assert (path / "tts-calls").read_text().strip() == "test"
+    assert not (path / "player-started").exists()
     writes = path / "mixer-writes"
     assert "mysoftvol 10%" not in (writes.read_text().splitlines() if writes.exists() else [])
 
 
-def test_volume_lock_contention_keeps_audio_and_journal_safe(text_device):
-    call, path, _ = text_device
+def test_volume_lock_contention_keeps_audio_and_journal_safe(text_device, speaker_shell):
+    _, path, env = text_device
     enable_airplay_duck_fixture(path)
     with (path / "xiaoai_bridge.volume.lock").open("a+") as gate:
         fcntl.flock(gate, fcntl.LOCK_EX)
-        result, payload = call("announce", "test")
+        result = subprocess.run(
+            [*speaker_shell, str(path / "bridge/lib/text.sh"), "announce", '{"text":"test"}'],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
     assert result.returncode != 0 and payload["error"] == "busy"
-    assert not (path / "tts-calls").exists() and not (path / "mixer-writes").exists()
+    assert (path / "tts-calls").read_text().strip() == "test"
+    assert not (path / "player-started").exists() and not (path / "mixer-writes").exists()
     assert not (path / "xiaoai_bridge.duck.json").exists()
     with (path / "xiaoai_bridge.audio.lock").open("a+") as gate:
         fcntl.flock(gate, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -213,7 +222,7 @@ def test_interrupted_automatic_duck_recovers_and_releases_audio(text_device, spe
     enable_airplay_duck_fixture(path)
     proc = subprocess.Popen(
         [*speaker_shell, str(path / "bridge/lib/text.sh"), "announce", '{"text":"test"}'],
-        env={**env, "TTS_SLEEP": "30"},
+        env={**env, "PLAY_SLEEP": "30"},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -221,8 +230,8 @@ def test_interrupted_automatic_duck_recovers_and_releases_audio(text_device, spe
     )
     try:
         assert "synthesizing" in proc.stdout.readline()
-        started = time.monotonic() + 2
-        while not (path / "tts-calls").exists():
+        started = time.monotonic() + 5
+        while not (path / "player-started").exists():
             assert time.monotonic() < started
             time.sleep(0.01)
         assert (path / "mixer-mysoftvol").read_text().strip() == "10"
@@ -279,7 +288,7 @@ printf 'string "Active"\\nvariant boolean true\\nstring "Volume"\\nvariant doubl
         else 'printf \'%s\' \'{"revision":2,"versions":{"master":2},"volumes":{"master":75}}\' > "$STATE_DIR/xiaoai_bridge.desired.json"\n'
     )
     script(
-        path / "existing-tts",
+        path / "tools/mpg123",
         f"""#!/bin/sh
 printf '%s\\n' -6 > "$STATE_DIR/sender-raw"
 printf '{new_master}\\n' > "$STATE_DIR/mixer-mysoftvol"

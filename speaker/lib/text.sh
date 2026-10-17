@@ -8,6 +8,7 @@ BRIDGE_TEXT_DIAGNOSTICS=1
 MODE=$1
 REQUEST=$2
 case "$MODE" in voice|send_text|announce) ;; *) fail invalid_request ;; esac
+[ "$MODE" = voice ] || . "$BRIDGE_DIR/lib/tts-playback.sh"
 bridge_profile task_begin
 # Read every request field with one jq startup. The final field is the raw
 # multiline text; it is read as data, never evaluated as shell code.
@@ -56,6 +57,7 @@ cleanup() {
     # enforces its existing final kill deadline for permanently blocked I/O.
     trap '' HUP INT TERM
     bridge_profile cleanup_begin
+    [ "$MODE" = voice ] || bridge_tts_gate_close || true
     restore_tts_volume || true
     bridge_duck_restore || true
     bridge_profile cleanup_volumes_done
@@ -133,10 +135,15 @@ speak() {
         amixer sset notifyvol "${override}%" >/dev/null 2>&1 || fail hardware_control_failed
         flock -u 7
     fi
-    bridge_duck_begin
+    if [ "$MODE" != voice ]; then bridge_tts_gate_prepare || fail local_resource_failed;fi
     printf '{"stage":"synthesizing"}\n'
     bridge_profile tts_launch
-    "$TTS_PATH" "$utterance" > /dev/null 2>&1 &
+    if [ "$MODE" = voice ]; then
+        "$TTS_PATH" "$utterance" > /dev/null 2>&1 &
+    else
+        XIAOAI_TTS_GATE="$TTS_PLAYBACK_DIR" XIAOAI_TTS_MODE="$MODE" XIAOAI_TTS_PLAYER_ACTIVE=0 \
+            PATH="$TTS_PLAYBACK_DIR:$PATH" "$TTS_PATH" "$utterance" > /dev/null 2>&1 &
+    fi
     tts_pid=$!
     # Inspect this invocation even when the kernel omits the children interface.
     # Descendants are optional; unrelated media never implies playing.
@@ -144,13 +151,20 @@ speak() {
         pending=$tts_pid
         playing=false
         visited=0
-        while [ -n "$pending" ] && [ "$visited" -lt 64 ]; do
+        if [ "$MODE" != voice ] && [ -r "$TTS_PLAYBACK_DIR/started" ]; then playing=true;fi
+        while [ "$playing" = false ] && [ -n "$pending" ] && [ "$visited" -lt 64 ]; do
             next=''
             for child in $pending; do
                 case "$child" in *[!0-9]*|'') continue ;; esac
                 visited=$((visited+1))
                 comm=$(cat "/proc/$child/comm" 2>/dev/null || true)
-                case "$comm" in miplay|mpg123|ogg123|aplay) playing=true;break ;; esac
+                case "$comm" in miplay|mpg123|ogg123|aplay)
+                    # A task-local shell gate is not the actual decoder yet.
+                    if [ "$MODE" != voice ] &&
+                       { tr '\000' '\n' 2>/dev/null < "/proc/$child/cmdline" |
+                           grep -qF "$TTS_PLAYBACK_DIR/"; }; then :
+                    else playing=true;break;fi ;;
+                esac
                 next="$next $(cat "/proc/$child/task/$child/children" 2>/dev/null || true)"
             done
             [ "$playing" = true ] && break
@@ -161,12 +175,17 @@ speak() {
     done
     result=0;wait "$tts_pid" || result=$?
     bridge_profile tts_finished
+    if [ "$MODE" != voice ]; then
+        [ ! -e "$TTS_PLAYBACK_DIR/failed" ] || result=1
+        bridge_tts_gate_close || result=1
+    fi
     bridge_profile tts_restore_begin
     restore_tts_volume || result=1
     bridge_profile tts_volume_restored
     bridge_duck_restore || result=1
     bridge_profile tts_duck_restored
     [ "$inherited_audio" = true ] || flock -u 8
+    if [ "$MODE" != voice ] && [ -n "$TTS_PLAYBACK_ERROR" ]; then fail "$TTS_PLAYBACK_ERROR";fi
     return "$result"
 }
 

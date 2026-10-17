@@ -43,7 +43,13 @@ def native_bridge(tmp_path, socket_enabled, request):
                     str,
                     (
                         ROOT / "speaker/src" / name
-                        for name in ("bridge.c", "json.c", "json_ops.c", "airplay.c")
+                        for name in (
+                            "bridge.c",
+                            "json.c",
+                            "json_ops.c",
+                            "airplay.c",
+                            "airplay_volume.c",
+                        )
                     ),
                 ),
                 "-o",

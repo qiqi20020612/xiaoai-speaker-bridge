@@ -1,12 +1,29 @@
 """Native text actions and narrowly scoped legacy send-button migration."""
 
 import asyncio
+import json
+from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.logbook.processor import EventProcessor
+from homeassistant.components.recorder.db_schema import EventData, Events, EventTypes
+from homeassistant.components.recorder.util import session_scope
+from homeassistant.const import EVENT_LOGBOOK_ENTRY
+from homeassistant.core import Context
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from homeassistant.setup import async_setup_component
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_capture_events,
+    mock_component,
+)
+from pytest_homeassistant_custom_component.components.recorder.common import (
+    async_recorder_block_till_done,
+)
+from sqlalchemy import select
 
 from custom_components.xiaoai_speaker.client import BridgeError
 from custom_components.xiaoai_speaker.const import DOMAIN
@@ -21,8 +38,30 @@ async def set_text(hass, entity_id, value):
     )
 
 
+@pytest.fixture
+def mock_recorder_before_hass(recorder_db_url):
+    """Prepare HA's native Recorder database before the hass fixture starts."""
+
+
+@pytest.fixture
+def logbook_config():
+    return {}
+
+
+@pytest.fixture
+async def logbook_events(recorder_mock, recorder_config, logbook_config, hass):
+    # UI assets are not needed; keep the native Logbook service and Recorder.
+    mock_component(hass, "frontend")
+    assert await async_setup_component(
+        hass, "logbook", {"recorder": recorder_config or {}, "logbook": logbook_config}
+    )
+    return async_capture_events(hass, EVENT_LOGBOOK_ENTRY)
+
+
 @pytest.mark.parametrize("kind", ["announce", "send_text"])
-async def test_text_retains_full_successful_input_until_next_submission(hass, mock_clients, kind):
+async def test_text_clears_and_logs_each_full_successful_input(
+    logbook_events, hass, mock_clients, kind
+):
     entry, c = await setup(hass)
     registry = er.async_get(hass)
     text_id = registry.async_get_entity_id("text", DOMAIN, f"synthetic-speaker_{kind}_text")
@@ -32,20 +71,43 @@ async def test_text_retains_full_successful_input_until_next_submission(hass, mo
         await set_text(hass, other_id, "另一实体的已提交文字")
         async with asyncio.timeout(2):
             await c.jobs.jobs[c.quick.requests[other]].done.wait()
-        for value in ('  第一行：完整文字\n第二行：引号"、emoji 👋  ', "字" * 255):
-            await set_text(hass, text_id, value)
-            assert hass.states.get(text_id).state == value
+        assert hass.states.get(other_id).state == ""
+        values = ('  第一行：完整文字\n第二行：引号"、emoji 👋 {{ 1 + 1 }}  ', "字" * 255)
+        for value in (*values, values[0]):
+            context = Context()
+            await hass.services.async_call(
+                "text",
+                "set_value",
+                {"entity_id": text_id, "value": value},
+                blocking=True,
+                context=context,
+            )
+            assert hass.states.get(text_id).state == ""
+            event = logbook_events[-1]
+            assert event.context is context
+            assert event.data == {
+                "name": hass.states.get(text_id).name,
+                "message": value,
+                "entity_id": text_id,
+                "domain": "text",
+            }
             async with asyncio.timeout(2):
                 await c.jobs.jobs[c.quick.requests[kind]].done.wait()
             c.async_set_updated_data(dict(c.data))
-            assert hass.states.get(text_id).state == value
+            assert hass.states.get(text_id).state == ""
             assert hass.states.get(text_id).attributes["status"] == "completed"
-            assert hass.states.get(other_id).state == "另一实体的已提交文字"
+            assert hass.states.get(other_id).state == ""
+    assert [(event.data["entity_id"], event.data["message"]) for event in logbook_events] == [
+        (other_id, "另一实体的已提交文字"),
+        *((text_id, value) for value in (*values, values[0])),
+    ]
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize("kind", ["announce", "send_text"])
-async def test_text_submission_failure_preserves_last_successful_value(hass, mock_clients, kind):
+async def test_text_submission_failure_keeps_unqueued_input_without_logbook_entry(
+    logbook_events, hass, mock_clients, kind
+):
     entry, c = await setup(hass)
     text_id = er.async_get(hass).async_get_entity_id(
         "text", DOMAIN, f"synthetic-speaker_{kind}_text"
@@ -65,11 +127,17 @@ async def test_text_submission_failure_preserves_last_successful_value(hass, moc
             with pytest.raises(HomeAssistantError, match="queue_full"):
                 await set_text(hass, text_id, "被拒绝的新文字")
             assert submit.call_count == 1
-        assert hass.states.get(text_id).state == previous
+        assert hass.states.get(text_id).state == "被拒绝的新文字"
         assert hass.states.get(text_id).attributes["request_id"] == request_id
+        assert [event.data["message"] for event in logbook_events] == [previous]
         assert not c.quick.pending
-        await set_text(hass, text_id, "下次成功的文字")
-        assert hass.states.get(text_id).state == "下次成功的文字"
+        with pytest.raises(HomeAssistantError, match="invalid_text"):
+            await set_text(hass, text_id, " \n\t")
+        assert hass.states.get(text_id).state == "被拒绝的新文字"
+        assert [event.data["message"] for event in logbook_events] == [previous]
+        await set_text(hass, text_id, "被拒绝的新文字")
+        assert hass.states.get(text_id).state == ""
+        assert [event.data["message"] for event in logbook_events] == [previous, "被拒绝的新文字"]
         async with asyncio.timeout(2):
             await c.jobs.jobs[c.quick.requests[kind]].done.wait()
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -77,7 +145,9 @@ async def test_text_submission_failure_preserves_last_successful_value(hass, moc
 
 @pytest.mark.parametrize("kind", ["announce", "send_text"])
 @pytest.mark.parametrize("value", ["", " \n\t", "nul\0text", "x" * 256, None, 123])
-async def test_text_rejects_invalid_input_without_submission(hass, mock_clients, kind, value):
+async def test_text_rejects_invalid_input_without_submission(
+    logbook_events, hass, mock_clients, kind, value
+):
     entry, c = await setup(hass)
     text_id = er.async_get(hass).async_get_entity_id(
         "text", DOMAIN, f"synthetic-speaker_{kind}_text"
@@ -91,13 +161,14 @@ async def test_text_rejects_invalid_input_without_submission(hass, mock_clients,
                 await hass.data["text"].get_entity(text_id).async_set_value(value)
         submit.assert_not_called()
     assert hass.states.get(text_id).state == "" and not c.quick.pending
+    assert not logbook_events
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize("kind", ["announce", "send_text"])
 @pytest.mark.parametrize("unavailable", ["offline", "capability", "stale"])
 async def test_text_rejects_unavailable_device_or_capability(
-    hass, mock_clients, caplog, kind, unavailable
+    logbook_events, hass, mock_clients, caplog, kind, unavailable
 ):
     entry, c = await setup(hass)
     text_id = er.async_get(hass).async_get_entity_id(
@@ -128,12 +199,14 @@ async def test_text_rejects_unavailable_device_or_capability(
                 DOMAIN, kind, {"entity_id": text_id, "text": "test"}, blocking=True
             )
         submit.assert_not_called()
-    assert not c.quick.pending
+    assert not c.quick.pending and not logbook_events
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize("kind", ["announce", "send_text"])
-async def test_text_rejects_concurrent_submission_before_service_returns(hass, mock_clients, kind):
+async def test_text_rejects_concurrent_submission_before_service_returns(
+    logbook_events, hass, mock_clients, kind
+):
     entry, c = await setup(hass)
     text_id = er.async_get(hass).async_get_entity_id(
         "text", DOMAIN, f"synthetic-speaker_{kind}_text"
@@ -159,12 +232,15 @@ async def test_text_rejects_concurrent_submission_before_service_returns(hass, m
             await first
         assert submit_job.call_count == 1
         assert submit_job.call_args.args[1]["text"] == "first instruction"
-    assert hass.states.get(text_id).state == "first instruction" and not c.quick.pending
+    assert hass.states.get(text_id).state == "" and not c.quick.pending
+    assert [event.data["message"] for event in logbook_events] == ["first instruction"]
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize("kind", ["announce", "send_text"])
-async def test_text_keeps_service_errors_and_task_failure_feedback(hass, mock_clients, kind):
+async def test_text_keeps_service_errors_and_task_failure_feedback(
+    logbook_events, hass, mock_clients, kind
+):
     entry, c = await setup(hass, {"agent_id": "conversation.existing"})
     text_id = er.async_get(hass).async_get_entity_id(
         "text", DOMAIN, f"synthetic-speaker_{kind}_text"
@@ -173,7 +249,8 @@ async def test_text_keeps_service_errors_and_task_failure_feedback(hass, mock_cl
         with pytest.raises(HomeAssistantError, match="queue_full"):
             await set_text(hass, text_id, "test")
     assert not c.quick.pending and kind not in c.quick.requests
-    assert hass.states.get(text_id).state == ""
+    assert hass.states.get(text_id).state == "test"
+    assert not logbook_events
     with patch.object(c.client, "submit", AsyncMock(side_effect=BridgeError("synthetic_failure"))):
         await set_text(hass, text_id, "test")
         request_id = c.quick.requests[kind]
@@ -182,8 +259,178 @@ async def test_text_keeps_service_errors_and_task_failure_feedback(hass, mock_cl
     state = hass.states.get(text_id)
     assert state.attributes["status"] == "failed"
     assert state.attributes["error"] == "synthetic_failure"
-    assert state.attributes["request_id"] == request_id and state.state == "test"
+    assert state.attributes["request_id"] == request_id and state.state == ""
+    assert [event.data["message"] for event in logbook_events] == ["test"]
     assert "agent_id" not in entry.options
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("kind", ["announce", "send_text"])
+@pytest.mark.parametrize(
+    ("recorder_config", "logbook_config", "recorded", "visible"),
+    [
+        ({"purge_keep_days": 3}, {}, True, True),
+        (
+            {"purge_keep_days": 3, "exclude": {"entities": ["text.custom_instruction"]}},
+            {},
+            False,
+            False,
+        ),
+        (
+            {"purge_keep_days": 3},
+            {"exclude": {"entities": ["text.custom_instruction"]}},
+            True,
+            False,
+        ),
+    ],
+    ids=["native-history", "recorder-excluded", "logbook-excluded"],
+)
+async def test_text_history_uses_native_recorder_logbook_filters_and_renamed_entity(
+    logbook_events, hass, mock_clients, recorder_mock, kind, recorded, visible
+):
+    entry, c = await setup(hass)
+    registry = er.async_get(hass)
+    unique_id = f"synthetic-speaker_{kind}_text"
+    previous_id = registry.async_get_entity_id("text", DOMAIN, unique_id)
+    count = len(registry.entities)
+    text_id = "text.custom_instruction"
+    registry.async_update_entity(previous_id, new_entity_id=text_id, name="Custom input")
+    await hass.async_block_till_done()
+    assert len(registry.entities) == count
+    assert registry.async_get_entity_id("text", DOMAIN, unique_id) == text_id
+    await hass.async_start()
+    value = '  完整原文\n"quoted" 👋 {{ 1 + 1 }}  '
+    value += "字" * (255 - len(value))
+    start = dt_util.utcnow() - timedelta(seconds=1)
+    with patch.object(c.client, "submit", AsyncMock(return_value={"status": "completed"})):
+        await set_text(hass, text_id, value)
+        async with asyncio.timeout(2):
+            await c.jobs.jobs[c.quick.requests[kind]].done.wait()
+    assert hass.states.get(text_id).state == ""
+    assert logbook_events[-1].data["entity_id"] == text_id
+    assert logbook_events[-1].data["message"] == value
+    assert logbook_events[-1].data["name"] == hass.states.get(text_id).name
+    await hass.async_block_till_done()
+    await async_recorder_block_till_done(hass)
+    entity_processor = EventProcessor(hass, (EVENT_LOGBOOK_ENTRY,), entity_ids=[text_id])
+    activity_processor = EventProcessor(hass, (EVENT_LOGBOOK_ENTRY,))
+
+    def read_native_history():
+        with session_scope(hass=hass, read_only=True) as session:
+            entries = session.scalars(
+                select(EventData.shared_data)
+                .join(Events, Events.data_id == EventData.data_id)
+                .join(EventTypes, EventTypes.event_type_id == Events.event_type_id)
+                .where(EventTypes.event_type == EVENT_LOGBOOK_ENTRY)
+            ).all()
+        end = dt_util.utcnow() + timedelta(seconds=1)
+        return (
+            [json.loads(data) for data in entries],
+            entity_processor.get_events(start, end),
+            activity_processor.get_events(start, end),
+        )
+
+    stored, entity_activity, activity = await hass.async_add_executor_job(read_native_history)
+    expected = [value] if recorded else []
+    assert [data["message"] for data in stored if data.get("entity_id") == text_id] == expected
+    # HA's explicit entity query uses Recorder contents; the global Activity
+    # query additionally applies Logbook's display filter. Preserve both rules.
+    assert [data["message"] for data in entity_activity if data.get("entity_id") == text_id] == (
+        expected
+    )
+    assert [data["message"] for data in activity if data.get("entity_id") == text_id] == (
+        [value] if visible else []
+    )
+    assert recorder_mock.keep_days == 3
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("kind", ["announce", "send_text"])
+async def test_text_logbook_failure_cannot_fail_or_repeat_an_accepted_task(
+    logbook_events, hass, mock_clients, caplog, kind
+):
+    entry, c = await setup(hass)
+    text_id = er.async_get(hass).async_get_entity_id(
+        "text", DOMAIN, f"synthetic-speaker_{kind}_text"
+    )
+
+    async def fail_log(call):
+        raise HomeAssistantError("synthetic_logbook_failure")
+
+    hass.services.async_register("logbook", "log", fail_log)
+    with (
+        patch.object(c.jobs, "submit", wraps=c.jobs.submit) as submit,
+        patch.object(c.client, "submit", AsyncMock(return_value={"status": "completed"})),
+    ):
+        await set_text(hass, text_id, "synthetic-private-input")
+        request_id = c.quick.requests[kind]
+        async with asyncio.timeout(2):
+            await c.jobs.jobs[request_id].done.wait()
+        assert submit.call_count == 1
+    assert not logbook_events and not c.quick.pending
+    assert hass.states.get(text_id).state == ""
+    assert hass.states.get(text_id).attributes["status"] == "completed"
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "custom_components.xiaoai_speaker.quick"
+    ]
+    assert messages == [f"Task {request_id} queued, but its Logbook entry failed"]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("kind", ["announce", "send_text"])
+async def test_text_stays_busy_until_its_logbook_submission_finishes(
+    logbook_events, hass, mock_clients, kind
+):
+    entry, c = await setup(hass)
+    text_id = er.async_get(hass).async_get_entity_id(
+        "text", DOMAIN, f"synthetic-speaker_{kind}_text"
+    )
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_log = hass.services.async_services()["logbook"]["log"]
+
+    async def delayed_log(call):
+        entered.set()
+        await release.wait()
+        original_log.job.target(call)
+
+    hass.services.async_register("logbook", "log", delayed_log, schema=original_log.schema)
+    with patch.object(c.client, "submit", AsyncMock(return_value={"status": "completed"})):
+        first = asyncio.create_task(set_text(hass, text_id, "first instruction"))
+        try:
+            async with asyncio.timeout(2):
+                await entered.wait()
+                await c.jobs.jobs[c.quick.requests[kind]].done.wait()
+            with pytest.raises(HomeAssistantError, match="quick_action_busy"):
+                await set_text(hass, text_id, "second instruction")
+        finally:
+            release.set()
+            await first
+    assert [event.data["message"] for event in logbook_events] == ["first instruction"]
+    assert len(c.jobs.jobs) == 1 and not c.quick.pending
+    assert hass.states.get(text_id).state == ""
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("kind", ["announce", "send_text"])
+async def test_text_without_logbook_keeps_existing_submission_available(hass, mock_clients, kind):
+    entry, c = await setup(hass)
+    assert not hass.services.has_service("logbook", "log")
+    text_id = er.async_get(hass).async_get_entity_id(
+        "text", DOMAIN, f"synthetic-speaker_{kind}_text"
+    )
+    with (
+        patch.object(c.jobs, "submit", wraps=c.jobs.submit) as submit,
+        patch.object(c.client, "submit", AsyncMock(return_value={"status": "completed"})),
+    ):
+        await set_text(hass, text_id, "synthetic instruction")
+        async with asyncio.timeout(2):
+            await c.jobs.jobs[c.quick.requests[kind]].done.wait()
+        assert submit.call_count == 1
+    assert hass.states.get(text_id).state == "" and not c.quick.pending
+    assert "logbook" not in hass.config.components
+    assert "recorder" not in hass.config.components
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
