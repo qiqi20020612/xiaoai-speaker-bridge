@@ -176,9 +176,9 @@ class VolumeManager:
         self.write_lock = asyncio.Lock()
         self._store_lock = asyncio.Lock()
         self._displayed: dict[str, float | None] = {}
-        # Separate in-flight intent from acknowledged intent awaiting a Probe:
-        # a newer failed/cancelled request must reveal the earlier success.
-        self._requests: dict[str, VolumeDisplayRequest] = {}
+        # Keep live intents in order, separate from acknowledged intent awaiting
+        # a Probe. Cancelling the newest reveals the previous live intent first.
+        self._requests: dict[str, list[VolumeDisplayRequest]] = {}
         self._confirmed: dict[str, VolumeDisplayRequest] = {}
 
     @staticmethod
@@ -212,7 +212,9 @@ class VolumeManager:
         return None
 
     def display_level(self, target: str, state: dict) -> float | None:
-        if request := self._requests.get(target) or self._confirmed.get(target):
+        if requests := self._requests.get(target):
+            return requests[-1].level
+        if request := self._confirmed.get(target):
             return request.level
         if self._temporary(state):
             for value in (
@@ -268,6 +270,16 @@ class VolumeManager:
     def _changed(self) -> None:
         if self.on_change:
             self.on_change()
+
+    def _remove_request(self, target: str, request: VolumeDisplayRequest) -> bool:
+        requests = self._requests.get(target, [])
+        for index, pending in enumerate(requests):
+            if pending is request:
+                del requests[index]
+                if not requests:
+                    del self._requests[target]
+                return True
+        return False
 
     async def load(self) -> None:
         saved = await self.store.async_load()
@@ -342,7 +354,8 @@ class VolumeManager:
         for item in plan:
             channel = item["target"]
             self._displayed.setdefault(channel, self.display_level(channel, self.state))
-            requests[channel] = self._requests[channel] = VolumeDisplayRequest(level)
+            requests[channel] = VolumeDisplayRequest(level)
+            self._requests.setdefault(channel, []).append(requests[channel])
         self.generation += 1
         results = []
         try:
@@ -357,15 +370,13 @@ class VolumeManager:
                     channel = item["target"]
                     self._displayed[channel] = level
                     self._confirmed[channel] = requests[channel]
-                    if self._requests.get(channel) is requests[channel]:
-                        del self._requests[channel]
+                    self._remove_request(channel, requests[channel])
                     self.generation += 1
                     self._changed()
         finally:
             rolled_back = False
             for channel, request in requests.items():
-                if self._requests.get(channel) is request:
-                    del self._requests[channel]
+                if self._remove_request(channel, request):
                     rolled_back = True
             if rolled_back:
                 self.generation += 1

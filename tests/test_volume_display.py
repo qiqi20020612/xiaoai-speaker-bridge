@@ -753,7 +753,7 @@ async def test_restart_replay_is_ordered_with_controls_and_reads_latest_desired(
 async def test_cancelled_waiter_does_not_cancel_earlier_control_or_send_a_write(
     hass, volume_entities
 ):
-    c, numbers, _, sample = volume_entities
+    c, numbers, player, sample = volume_entities
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def write(target, level, request_id):
@@ -772,6 +772,9 @@ async def test_cancelled_waiter_does_not_cancel_earlier_control_or_send_a_write(
             second.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await second
+            assert displayed(hass, "number", numbers["master"]) == 70
+            assert displayed(hass, "media_player", player) == 70
+            assert c.volume.desired["master"] == 60  # The first request is still in flight.
             release.set()
             await first
             assert displayed(hass, "number", numbers["master"]) == 70
@@ -780,6 +783,150 @@ async def test_cancelled_waiter_does_not_cancel_earlier_control_or_send_a_write(
             assert displayed(hass, "number", numbers["master"]) == 70
             assert c.volume.desired["master"] == 70
             assert control.await_count == 1
+        finally:
+            release.set()
+            await asyncio.gather(
+                *(task for task in (first, second) if task is not None), return_exceptions=True
+            )
+
+
+@pytest.mark.parametrize("entrypoint", ["media_player", DOMAIN])
+async def test_relative_control_after_cancelling_newest_uses_still_pending_target(
+    hass, volume_entities, entrypoint
+):
+    c, numbers, player, _ = volume_entities
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    async def write(target, level, request_id):
+        calls.append((target, level))
+        entered.set()
+        await release.wait()
+        return acknowledgement(target, level, request_id)
+
+    second = relative = None
+    with patch.object(c.client, "volume", side_effect=write):
+        first = asyncio.create_task(c.volume.set("master", 70))
+        try:
+            async with asyncio.timeout(5):
+                await entered.wait()
+            second = asyncio.create_task(c.volume.set("master", 80))
+            await wait_value(hass, "number", numbers["master"], 80)
+            second.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await second
+            relative = asyncio.create_task(
+                hass.services.async_call(
+                    entrypoint, "volume_up", {"entity_id": player}, blocking=True
+                )
+            )
+            await wait_value(hass, "number", numbers["master"], 80)
+            assert calls == [("master", 70)]
+            release.set()
+            await asyncio.gather(first, relative)
+            assert calls == [("master", 70), ("master", 80)]
+            assert c.volume.desired["master"] == 80
+        finally:
+            release.set()
+            await asyncio.gather(
+                *(task for task in (first, second, relative) if task is not None),
+                return_exceptions=True,
+            )
+
+
+@pytest.mark.parametrize("order", [(1, 2), (2, 1)])
+async def test_cancelling_queued_requests_in_either_order_restores_live_predecessor(
+    hass, volume_entities, order
+):
+    c, numbers, _, sample = volume_entities
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def write(target, level, request_id):
+        entered.set()
+        await release.wait()
+        return acknowledgement(target, level, request_id)
+
+    tasks = []
+    levels = [70, 80, 90]
+    with patch.object(c.client, "volume", side_effect=write) as control:
+        try:
+            tasks.append(asyncio.create_task(c.volume.set("master", levels[0])))
+            async with asyncio.timeout(5):
+                await entered.wait()
+            for level in levels[1:]:
+                tasks.append(asyncio.create_task(c.volume.set("master", level)))
+                await wait_value(hass, "number", numbers["master"], level)
+            cancelled = set()
+            for index in order:
+                tasks[index].cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await tasks[index]
+                cancelled.add(index)
+                expected = next(levels[i] for i in (2, 1, 0) if i not in cancelled)
+                assert displayed(hass, "number", numbers["master"]) == expected
+                assert c.volume.desired["master"] == 60
+            release.set()
+            await tasks[0]
+            await refresh(c, sample)
+            await refresh(c, sample, updated=101, volumes={**sample["volumes"], "master": 70})
+            await refresh(c, sample, updated=102, volumes={**sample["volumes"], "master": 45})
+            assert displayed(hass, "number", numbers["master"]) == 45
+            assert c.volume.desired["master"] == 45
+            control.assert_awaited_once()
+        finally:
+            release.set()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.parametrize("first_fails", [False, True])
+async def test_cancelled_equal_level_request_cannot_leave_a_display_orphan(
+    hass, volume_entities, first_fails
+):
+    c, numbers, _, sample = volume_entities
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def write(target, level, request_id):
+        entered.set()
+        await release.wait()
+        if first_fails:
+            raise BridgeError("hardware_control_failed")
+        return acknowledgement(target, level, request_id)
+
+    second = None
+    with patch.object(c.client, "volume", side_effect=write) as control:
+        first = asyncio.create_task(c.volume.set("master", 70))
+        try:
+            async with asyncio.timeout(5):
+                await entered.wait()
+            queued = asyncio.Event()
+
+            @callback
+            def changed():
+                c.async_update_listeners()
+                queued.set()
+
+            # Equal targets do not fire a HA state change; wait for the existing
+            # listener notification before cancelling the queued request.
+            with patch.object(c.volume, "on_change", changed):
+                second = asyncio.create_task(c.volume.set("master", 70))
+                async with asyncio.timeout(5):
+                    await queued.wait()
+            second.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await second
+            assert displayed(hass, "number", numbers["master"]) == 70
+            release.set()
+            result = (await asyncio.gather(first, return_exceptions=True))[0]
+            assert isinstance(result, BridgeError) is first_fails
+            expected = 60 if first_fails else 70
+            assert displayed(hass, "number", numbers["master"]) == expected
+            assert c.volume.desired["master"] == expected
+            await refresh(c, sample)
+            await refresh(c, sample, updated=101, volumes={**sample["volumes"], "master": 45})
+            await refresh(c, sample, updated=102)
+            assert displayed(hass, "number", numbers["master"]) == 45
+            assert c.volume.desired["master"] == 45
+            control.assert_awaited_once()
         finally:
             release.set()
             await asyncio.gather(
