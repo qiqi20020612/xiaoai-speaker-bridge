@@ -79,7 +79,7 @@ class VolumeResolveView(HomeAssistantView):
                         or not 0 <= item["level"] <= 100
                     ):
                         raise BridgeError("invalid_volume")
-                await coordinator.volume.commit(plan)
+                await coordinator.volume.commit(plan, acknowledged=True)
                 return self.json({"committed": True})
             result = coordinator.volume.plan(
                 text, payload.get("snapshot"), payload.get("local_intent")

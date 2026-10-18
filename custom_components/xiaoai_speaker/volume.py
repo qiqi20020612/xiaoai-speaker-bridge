@@ -308,7 +308,13 @@ class VolumeManager:
             plan.append({"target": target, "level": level})
         return {"handled": True, "plan": plan, "reply_text": "音量已调整。"}
 
-    async def commit(self, plan: list[dict], *, generation: int | None = None) -> None:
+    async def commit(
+        self,
+        plan: list[dict],
+        *,
+        generation: int | None = None,
+        acknowledged: bool = False,
+    ) -> None:
         async with self._store_lock:
             if generation is not None and generation != self.generation:
                 return
@@ -318,6 +324,15 @@ class VolumeManager:
             except OSError:
                 raise BridgeError("state_write_failed") from None
             self.desired = desired
+            if acknowledged and plan:
+                # LX06 also executes volume plans locally. Its success callback
+                # supersedes older confirmations, without hiding pending HA input.
+                for item in plan:
+                    target, level = item["target"], item["level"]
+                    self._displayed[target] = level
+                    self._confirmed[target] = VolumeDisplayRequest(level)
+                self.generation += 1
+                self._changed()
 
     async def set(self, target: str, level: float, *, source: str | None = None) -> dict:
         if not self._valid_level(level):

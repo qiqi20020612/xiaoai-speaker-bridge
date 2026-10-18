@@ -100,6 +100,13 @@ def acknowledgement(target, level, request_id):
     return {"target": target, "level": level, "applied": True, "deferred": False}
 
 
+async def commit_text_volume(client, plan):
+    return await client.post(
+        "/api/xiaoai_speaker/synthetic-speaker/volume_plan",
+        json={"commit": True, "plan": plan},
+    )
+
+
 async def refresh(c, sample, **updates):
     sample.update(updates)
     await c.async_refresh()
@@ -778,3 +785,175 @@ async def test_cancelled_waiter_does_not_cancel_earlier_control_or_send_a_write(
             await asyncio.gather(
                 *(task for task in (first, second) if task is not None), return_exceptions=True
             )
+
+
+@pytest.mark.parametrize(
+    "channel,text",
+    [("master", "主音量调到40%"), ("tts", "播报音量调到40%"), ("bluetooth", "蓝牙音量调到40%")],
+)
+@pytest.mark.parametrize("temporary", ["idle", "voice", "duck"])
+async def test_text_success_replaces_older_target_and_safe_probe_boundary(
+    hass, volume_entities, hass_client, channel, text, temporary
+):
+    c, numbers, player, sample = volume_entities
+    client = await hass_client()
+    with patch.object(c.client, "volume", side_effect=acknowledgement) as control:
+        await set_volume(hass, "number", numbers[channel], 75)
+        flags = {
+            "idle": {},
+            "voice": {"voice": {"active": True, "volumes": copy.deepcopy(sample["volumes"])}},
+            "duck": {"audio_active": True, "volume_recovery_pending": True},
+        }[temporary]
+        await refresh(c, sample, updated=101, **flags)
+        generation = c.volume.generation
+        response = await client.post(
+            "/api/xiaoai_speaker/synthetic-speaker/volume_plan", json={"text": text}
+        )
+        assert response.status == 200
+        plan = (await response.json())["plan"]
+        assert plan == [{"target": channel, "level": 40}]
+        assert displayed(hass, "number", numbers[channel]) == 75  # Planning is not execution.
+        assert c.volume.generation == generation
+        response = await commit_text_volume(client, plan)
+        assert response.status == 200 and await response.json() == {"committed": True}
+        assert displayed(hass, "number", numbers[channel]) == 40
+        if channel == "master":
+            assert displayed(hass, "media_player", player) == 40
+        assert c.volume.desired[channel] == 40
+        assert c.volume.generation > generation
+        await refresh(c, sample)  # The old cached sample must not undo the text command.
+        await refresh(
+            c,
+            sample,
+            updated=102,
+            voice={"active": False},
+            audio_active=False,
+            volume_recovery_pending=False,
+        )
+        assert displayed(hass, "number", numbers[channel]) == 40
+        assert c.volume.desired[channel] == 40
+        await refresh(c, sample, updated=103, volumes={**sample["volumes"], channel: 40})
+        await refresh(c, sample, updated=104, volumes={**sample["volumes"], channel: 45})
+        assert displayed(hass, "number", numbers[channel]) == 45
+        assert c.volume.desired[channel] == 45
+        assert control.await_count == 1  # The callback never repeats the device write.
+
+
+@pytest.mark.parametrize("entrypoint", ["media_player", DOMAIN])
+async def test_relative_control_starts_from_latest_successful_text_commit(
+    hass, volume_entities, hass_client, entrypoint
+):
+    c, numbers, player, _ = volume_entities
+    client = await hass_client()
+    with patch.object(c.client, "volume", side_effect=acknowledgement) as control:
+        await set_volume(hass, "number", numbers["master"], 75)
+        response = await commit_text_volume(client, [{"target": "master", "level": 40}])
+        assert response.status == 200
+        await hass.services.async_call(
+            entrypoint, "volume_up", {"entity_id": player}, blocking=True
+        )
+        assert [call.args[:2] for call in control.await_args_list] == [
+            ("master", 75),
+            ("master", 50),
+        ]
+        assert displayed(hass, "number", numbers["master"]) == 50
+
+
+@pytest.mark.parametrize("failure", ["invalid_volume", "state_write_failed"])
+async def test_failed_text_commit_keeps_prior_display_and_generation(
+    hass, volume_entities, hass_client, failure
+):
+    c, numbers, _, _ = volume_entities
+    client = await hass_client()
+    with patch.object(c.client, "volume", side_effect=acknowledgement) as control:
+        await set_volume(hass, "number", numbers["master"], 75)
+        generation = c.volume.generation
+        with patch.object(
+            c.volume.store,
+            "async_save",
+            AsyncMock(side_effect=OSError("synthetic storage failure")),
+        ) as save:
+            response = await commit_text_volume(
+                client, [{"target": "master", "level": 101 if failure == "invalid_volume" else 40}]
+            )
+        assert response.status == 409 and await response.json() == {"error": failure}
+        assert save.await_count == (failure == "state_write_failed")
+        assert displayed(hass, "number", numbers["master"]) == 75
+        assert c.volume.desired["master"] == 75
+        assert c.volume.generation == generation
+        assert control.await_count == 1
+
+
+@pytest.mark.parametrize("write_fails", [False, True])
+async def test_text_commit_preserves_pending_ha_intent_and_becomes_failure_fallback(
+    hass, volume_entities, hass_client, write_fails
+):
+    c, numbers, player, sample = volume_entities
+    client = await hass_client()
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def write(target, level, request_id):
+        if level == 80:
+            entered.set()
+            await release.wait()
+            if write_fails:
+                raise BridgeError("hardware_control_failed")
+        return acknowledgement(target, level, request_id)
+
+    with patch.object(c.client, "volume", side_effect=write) as control:
+        await set_volume(hass, "number", numbers["master"], 75)
+        operation = asyncio.create_task(set_volume(hass, "number", numbers["master"], 80))
+        try:
+            async with asyncio.timeout(5):
+                await entered.wait()
+            response = await commit_text_volume(client, [{"target": "master", "level": 40}])
+            assert response.status == 200
+            assert c.volume.desired["master"] == 40
+            assert displayed(hass, "number", numbers["master"]) == 80
+            assert displayed(hass, "media_player", player) == 80
+            release.set()
+            result = (await asyncio.gather(operation, return_exceptions=True))[0]
+            assert isinstance(result, HomeAssistantError) is write_fails
+            expected = 40 if write_fails else 80
+            assert displayed(hass, "number", numbers["master"]) == expected
+            assert c.volume.desired["master"] == expected
+            await refresh(c, sample)
+            await refresh(c, sample, updated=101)
+            assert displayed(hass, "number", numbers["master"]) == expected
+            assert c.volume.desired["master"] == expected
+            assert control.await_count == 2
+        finally:
+            release.set()
+            await asyncio.gather(operation, return_exceptions=True)
+
+
+async def test_poll_started_before_text_commit_cannot_override_it(
+    hass, volume_entities, hass_client
+):
+    c, numbers, _, sample = volume_entities
+    client = await hass_client()
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def read():
+        entered.set()
+        await release.wait()
+        return copy.deepcopy(sample) | {"updated": 101}
+
+    with (
+        patch.object(c.client, "volume", side_effect=acknowledgement) as control,
+        patch.object(c.client, "state", side_effect=read),
+    ):
+        poll = asyncio.create_task(c.async_refresh())
+        try:
+            async with asyncio.timeout(5):
+                await entered.wait()
+            response = await commit_text_volume(client, [{"target": "master", "level": 40}])
+            assert response.status == 200
+            release.set()
+            await poll
+            assert displayed(hass, "number", numbers["master"]) == 40
+            assert c.volume.desired["master"] == 40
+            control.assert_not_awaited()
+        finally:
+            release.set()
+            await asyncio.gather(poll, return_exceptions=True)
