@@ -162,7 +162,9 @@ async def test_restoration_during_slow_probe_cannot_persist_temporary_volume(
             (path / f"mixer-{mixer}").write_text("45")
             state.update((await hass.async_add_executor_job(run))["state"])
             await c.async_refresh()
-            commit.assert_awaited_once_with([{"target": channel, "level": 45}])
+            commit.assert_awaited_once_with(
+                [{"target": channel, "level": 45}], generation=c.volume.generation
+            )
     finally:
         assert await hass.config_entries.async_unload(entry.entry_id)
 

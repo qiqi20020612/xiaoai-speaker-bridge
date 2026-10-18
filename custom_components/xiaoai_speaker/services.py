@@ -74,14 +74,11 @@ def register_services(hass):
                 result = {"request_id": job.request_id, "status": job.status, **job.result}
             elif call.service == "set_volume":
                 result = await coordinator.volume.set(call.data["target"], call.data["level"])
-                await coordinator.async_request_refresh()
             elif call.service in ("volume_up", "volume_down"):
                 targets = coordinator.volume.targets(call.data["target"])
                 result = {"targets": targets}
                 for target in targets:
-                    current = coordinator.volume.desired.get(
-                        target, coordinator.data.get("volumes", {}).get(target)
-                    )
+                    current = coordinator.volume.display_level(target, coordinator.data)
                     if current is None:
                         raise BridgeError("volume_unknown")
                     delta = call.data["step"] * (1 if call.service == "volume_up" else -1)

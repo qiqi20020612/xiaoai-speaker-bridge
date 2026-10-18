@@ -109,12 +109,7 @@ class XiaoAIMediaPlayer(XiaoAIEntity, MediaPlayerEntity):
         target = {"airplay": "airplay", "bluetooth": "bluetooth", "mpd": "master"}.get(
             self.source, "master"
         )
-        data = self.coordinator.data
-        value = data.get("volumes", {}).get(target)
-        if data.get("voice", {}).get("active") or data.get("audio_active"):
-            value = self.coordinator.volume.desired.get(
-                target, data.get("voice", {}).get("volumes", {}).get(target, value)
-            )
+        value = self.coordinator.volume.display_level(target, self.coordinator.data)
         return value / 100 if isinstance(value, (int, float)) else None
 
     @property
@@ -390,7 +385,6 @@ class XiaoAIMediaPlayer(XiaoAIEntity, MediaPlayerEntity):
     async def async_set_volume_level(self, volume):
         try:
             await self.coordinator.volume.set("auto", float(volume) * 100)
-            await self.coordinator.async_request_refresh()
         except BridgeError as err:
             raise HomeAssistantError(err.code) from None
 

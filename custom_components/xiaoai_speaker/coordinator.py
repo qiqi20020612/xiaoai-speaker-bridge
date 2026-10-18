@@ -32,7 +32,7 @@ class XiaoAICoordinator(DataUpdateCoordinator):
         self.client = client
         self.mpd = mpd
         self.info: dict = {}
-        self.volume = VolumeManager(hass, entry, client)
+        self.volume = VolumeManager(hass, entry, client, self.async_update_listeners)
         self.jobs = JobManager(hass, client, self._job_changed)
         self.quick = QuickControls(self)
         self._events_task = None
@@ -56,6 +56,7 @@ class XiaoAICoordinator(DataUpdateCoordinator):
         await self.volume.load()
 
     async def _async_update_data(self) -> dict:
+        volume_generation = self.volume.generation
         try:
             state = await self.client.state()
             if state.get("device_id", self.entry.unique_id) != self.entry.unique_id:
@@ -80,16 +81,20 @@ class XiaoAICoordinator(DataUpdateCoordinator):
         if "capabilities" in state:
             self.info["capabilities"] = state["capabilities"]
             self.volume.caps = state["capabilities"]
+        observed_volumes = self.volume.observe(state, volume_generation, busy=self.jobs.executing)
         instance = state.get("instance_id")
         if instance and instance != self._synced_instance:
             all_synced = True
-            for target, level in list(self.volume.desired.items()):
-                if not self.volume.caps.get("volume", {}).get(target):
-                    continue
-                try:
-                    await self.client.volume(target, level, uuid.uuid4().hex)
-                except BridgeError:
-                    all_synced = False
+            # Keep the existing restart replay ordered with user volume writes.
+            # Read desired values after taking the lock, not before waiting.
+            async with self.volume.write_lock:
+                for target, level in list(self.volume.desired.items()):
+                    if not self.volume.caps.get("volume", {}).get(target):
+                        continue
+                    try:
+                        await self.client.volume(target, level, uuid.uuid4().hex)
+                    except BridgeError:
+                        all_synced = False
             if all_synced:
                 self._synced_instance = instance
         elif (
@@ -101,7 +106,7 @@ class XiaoAICoordinator(DataUpdateCoordinator):
             and not state.get("state_stale")
         ):
             changed = []
-            for target, level in state.get("volumes", {}).items():
+            for target, level in observed_volumes.items():
                 if (
                     self.volume.caps.get("volume", {}).get(target)
                     and isinstance(level, (int, float))
@@ -110,7 +115,7 @@ class XiaoAICoordinator(DataUpdateCoordinator):
                 ):
                     changed.append({"target": target, "level": level})
             if changed:
-                await self.volume.commit(changed)
+                await self.volume.commit(changed, generation=volume_generation)
         # Lightweight device snapshots only; HA retains policy and durable desired values.
         try:
             await self.client.request(

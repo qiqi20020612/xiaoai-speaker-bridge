@@ -39,18 +39,11 @@ class VolumeNumber(XiaoAIEntity, NumberEntity):
 
     @property
     def native_value(self):
-        data = self.coordinator.data
-        value = data.get("volumes", {}).get(self.channel)
-        if data.get("voice", {}).get("active") or data.get("audio_active"):
-            value = self.coordinator.volume.desired.get(
-                self.channel, data.get("voice", {}).get("volumes", {}).get(self.channel, value)
-            )
-        return value
+        return self.coordinator.volume.display_level(self.channel, self.coordinator.data)
 
     async def async_set_native_value(self, value):
         self.require_available()
         try:
             await self.coordinator.volume.set(self.channel, value)
-            await self.coordinator.async_request_refresh()
         except BridgeError as err:
             raise HomeAssistantError(err.code) from None

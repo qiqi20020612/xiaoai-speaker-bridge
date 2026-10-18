@@ -8,6 +8,7 @@ CI 使用 Python 3.14、Home Assistant 2026.10.0、官方 HA fixture 的 custom-
 |---|---|
 | `test_homeassistant.py` | config flow、鉴权失败、稳定身份、实体、AirPlay active/MPD stop、无 Linn、服务定位、options、卸载 |
 | `test_volume.py` | 冻结来源、显式目标、空闲策略、并发优先级、AirPlay 双重衰减预检、中英文音量规则 |
+| `test_volume_display.py` | HA 原生 Number/media_player 即时目标、失败/Store 回滚、同/跨通道并发、过期查询与 Probe、空/非法值、语音/Duck 延迟、能力/路由、相对操作、部分成功、取消等待和重启同步；断言控制调用次数及持久值，显示刷新不重发控制 |
 | `test_mpd.py` | 真正 asyncio 原生协议对话、队列、安全转义、ACK、坏参数先验证再清队列 |
 | `test_client.py` | 分段 HTTP、回复上限、不确定 POST 标记 |
 | `test_bridge.py` | 本机真实 C HTTP 进程、认证、阶段状态、忙碌、幂等/冲突、输入/Unicode/HTTP 限制、Unix voice event、取消、多实例 |
