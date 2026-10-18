@@ -320,6 +320,17 @@ class VolumeManager:
             plan.append({"target": target, "level": level})
         return {"handled": True, "plan": plan, "reply_text": "音量已调整。"}
 
+    def acknowledge(self, plan: list[dict]) -> None:
+        """Protect acknowledged targets without another device or storage write."""
+        if not plan:
+            return
+        for item in plan:
+            target, level = item["target"], item["level"]
+            self._displayed[target] = level
+            self._confirmed[target] = VolumeDisplayRequest(level)
+        self.generation += 1
+        self._changed()
+
     async def commit(
         self,
         plan: list[dict],
@@ -336,15 +347,10 @@ class VolumeManager:
             except OSError:
                 raise BridgeError("state_write_failed") from None
             self.desired = desired
-            if acknowledged and plan:
+            if acknowledged:
                 # LX06 also executes volume plans locally. Its success callback
                 # supersedes older confirmations, without hiding pending HA input.
-                for item in plan:
-                    target, level = item["target"], item["level"]
-                    self._displayed[target] = level
-                    self._confirmed[target] = VolumeDisplayRequest(level)
-                self.generation += 1
-                self._changed()
+                self.acknowledge(plan)
 
     async def set(self, target: str, level: float, *, source: str | None = None) -> dict:
         if not self._valid_level(level):

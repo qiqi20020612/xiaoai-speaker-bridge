@@ -750,6 +750,187 @@ async def test_restart_replay_is_ordered_with_controls_and_reads_latest_desired(
             )
 
 
+@pytest.mark.parametrize("startup", [False, True])
+@pytest.mark.parametrize("channel", ["master", "tts", "bluetooth"])
+async def test_replay_success_updates_display_before_relative_control(
+    hass, volume_entities, startup, channel
+):
+    c, numbers, player, sample = volume_entities
+    entry = c.entry
+    # A durable target loaded on restart has no optimistic request to protect it.
+    await c.volume.commit([{"target": channel, "level": 75}])
+    desired = copy.deepcopy(c.volume.desired)
+    with patch(
+        "custom_components.xiaoai_speaker.client.BridgeClient.volume",
+        side_effect=acknowledgement,
+    ) as control:
+        if startup:
+            assert await hass.config_entries.async_reload(entry.entry_id)
+            await hass.async_block_till_done()
+            c = entry.runtime_data.coordinator
+        else:
+            await refresh(c, sample, instance_id="replayed-volume-display-instance")
+        assert displayed(hass, "number", numbers[channel]) == 75
+        if channel == "master":
+            assert displayed(hass, "media_player", player) == 75
+        assert c.volume.desired == desired
+        assert [(call.args[0], call.args[1]) for call in control.await_args_list] == list(
+            desired.items()
+        )
+        await hass.services.async_call(
+            DOMAIN,
+            "volume_up",
+            {"entity_id": player, "target": channel, "step": 10},
+            blocking=True,
+        )
+        assert control.await_args.args[:2] == (channel, 85)
+        assert control.await_count == 4
+        assert displayed(hass, "number", numbers[channel]) == 85
+
+
+async def test_replay_success_waits_for_safe_probe_without_resaving_or_replaying(
+    hass, volume_entities
+):
+    c, numbers, _, sample = volume_entities
+    await c.volume.commit([{"target": "master", "level": 75}])
+    with (
+        patch.object(c.client, "volume", side_effect=acknowledgement) as control,
+        patch.object(c.volume.store, "async_save", wraps=c.volume.store.async_save) as save,
+    ):
+        await refresh(c, sample, instance_id="replayed-volume-display-instance")
+        assert displayed(hass, "number", numbers["master"]) == 75
+        save.assert_not_awaited()
+        await refresh(c, sample)
+        await refresh(c, sample, updated=101)
+        assert displayed(hass, "number", numbers["master"]) == 75
+        assert c.volume.desired["master"] == 75
+        save.assert_not_awaited()
+        await refresh(c, sample, updated=102, volumes={**sample["volumes"], "master": 74})
+        assert displayed(hass, "number", numbers["master"]) == 74
+        assert c.volume.desired["master"] == 74
+        assert save.await_count == 1  # Only the later actual observation is saved.
+        assert control.await_count == 3
+
+
+@pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
+async def test_replay_confirmation_keeps_new_pending_input_and_failure_fallback(
+    hass, volume_entities, outcome
+):
+    c, numbers, _, sample = volume_entities
+    await c.volume.commit([{"target": "master", "level": 75}])
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def write(target, level, request_id):
+        if target == "master" and level == 75:
+            entered.set()
+            await release.wait()
+        if target == "master" and level == 80 and outcome == "error":
+            raise BridgeError("hardware_control_failed")
+        return acknowledgement(target, level, request_id)
+
+    sample["instance_id"] = "replayed-volume-display-instance"
+    operation = None
+    with (
+        patch.object(c.client, "volume", side_effect=write) as control,
+        patch.object(c.volume.store, "async_save", wraps=c.volume.store.async_save) as save,
+    ):
+        poll = asyncio.create_task(c.async_refresh())
+        try:
+            async with asyncio.timeout(5):
+                await entered.wait()
+            operation = asyncio.create_task(set_volume(hass, "number", numbers["master"], 80))
+            await wait_value(hass, "number", numbers["master"], 80)
+            if outcome == "cancel":
+                operation.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await operation
+            release.set()
+            await poll
+            if outcome == "error":
+                with pytest.raises(HomeAssistantError, match="hardware_control_failed"):
+                    await operation
+            elif outcome == "success":
+                await operation
+            expected = 80 if outcome == "success" else 75
+            assert displayed(hass, "number", numbers["master"]) == expected
+            assert c.volume.desired["master"] == expected
+            assert save.await_count == (outcome == "success")
+            await refresh(c, sample)
+            await refresh(c, sample, updated=101)
+            assert displayed(hass, "number", numbers["master"]) == expected
+            assert c.volume.desired["master"] == expected
+            assert control.await_count == (3 if outcome == "cancel" else 4)
+        finally:
+            release.set()
+            await asyncio.gather(
+                *(task for task in (poll, operation) if task is not None), return_exceptions=True
+            )
+
+
+async def test_failed_replay_does_not_confirm_target_or_resave_desired(hass, volume_entities):
+    c, numbers, _, sample = volume_entities
+    await c.volume.commit([{"target": "master", "level": 75}])
+
+    def fail_master(target, level, request_id):
+        if target == "master":
+            raise BridgeError("hardware_control_failed")
+        return acknowledgement(target, level, request_id)
+
+    with (
+        patch.object(c.client, "volume", side_effect=fail_master) as control,
+        patch.object(c.volume.store, "async_save", wraps=c.volume.store.async_save) as save,
+    ):
+        await refresh(c, sample, instance_id="replayed-volume-display-instance")
+        assert displayed(hass, "number", numbers["master"]) == 60
+        assert c.volume.desired["master"] == 75
+        assert c._synced_instance != sample["instance_id"]
+        assert control.await_count == 3
+        save.assert_not_awaited()
+    with (
+        patch.object(c.client, "volume", side_effect=acknowledgement) as control,
+        patch.object(c.volume.store, "async_save", wraps=c.volume.store.async_save) as save,
+    ):
+        await refresh(c, sample)
+        assert displayed(hass, "number", numbers["master"]) == 75
+        assert c.volume.desired["master"] == 75
+        assert c._synced_instance == sample["instance_id"]
+        assert control.await_count == 3
+        save.assert_not_awaited()
+
+
+async def test_replay_ack_cannot_hide_newer_successful_text_target(
+    hass, volume_entities, hass_client
+):
+    c, numbers, _, sample = volume_entities
+    client = await hass_client()
+    await c.volume.commit([{"target": "master", "level": 75}])
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def write(target, level, request_id):
+        if target == "master":
+            entered.set()
+            await release.wait()
+        return acknowledgement(target, level, request_id)
+
+    sample["instance_id"] = "replayed-volume-display-instance"
+    with patch.object(c.client, "volume", side_effect=write) as control:
+        poll = asyncio.create_task(c.async_refresh())
+        try:
+            async with asyncio.timeout(5):
+                await entered.wait()
+            response = await commit_text_volume(client, [{"target": "master", "level": 40}])
+            assert response.status == 200
+            assert displayed(hass, "number", numbers["master"]) == 40
+            release.set()
+            await poll
+            assert displayed(hass, "number", numbers["master"]) == 40
+            assert c.volume.desired["master"] == 40
+            assert control.await_count == 3
+        finally:
+            release.set()
+            await asyncio.gather(poll, return_exceptions=True)
+
+
 async def test_cancelled_waiter_does_not_cancel_earlier_control_or_send_a_write(
     hass, volume_entities
 ):

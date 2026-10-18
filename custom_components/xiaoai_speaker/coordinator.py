@@ -95,6 +95,11 @@ class XiaoAICoordinator(DataUpdateCoordinator):
                         await self.client.volume(target, level, uuid.uuid4().hex)
                     except BridgeError:
                         all_synced = False
+                    else:
+                        # A local text callback may have committed a newer
+                        # target while this replay waited for its response.
+                        if self.volume.desired.get(target) == level:
+                            self.volume.acknowledge([{"target": target, "level": level}])
             if all_synced:
                 self._synced_instance = instance
         elif (
