@@ -10,8 +10,9 @@
 
 int main(int argc, char **argv) {
 #ifdef XIAOAI_TEST_AIRPLAY
-    if (argc == 7 && !strcmp(argv[1], "--airplay-volume-target"))
-        return bridge_airplay_volume_target(argv[2], argv[3], argv[4], argv[5], argv[6]);
+    if ((argc == 7 || (argc == 8 && !strcmp(argv[7], "--verify"))) &&
+        !strcmp(argv[1], "--airplay-volume-target"))
+        return bridge_airplay_volume_target(argv[2], argv[3], argv[4], argv[5], argv[6], argc == 8);
     if (argc == 2 && !strcmp(argv[1], "--airplay-metadata"))
         return bridge_airplay_metadata();
     if (argc == 4 && !strcmp(argv[1], "--test-artwork")) {

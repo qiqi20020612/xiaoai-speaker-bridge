@@ -115,10 +115,33 @@ dict entry(
             ],
             input="numid=1,iface=MIXER,name='mysoftvol'\n"
             " ; type=INTEGER,access=rw---RW-,values=2,min=0,max=255,step=0\n"
+            " : values=26,26\n"
             " | dBscale-min=-51.00dB,step=0.20dB,mute=0\n",
             text=True,
         )
-        assert sender_target == "-7.00dB\n"
+        assert sender_target == "220,220\n"
+        for pair, expected in (("177,177", 0), ("177,176", 2), ("26,26", 2)):
+            checked = subprocess.run(
+                [
+                    args.qemu,
+                    str(args.binary.resolve()),
+                    "--airplay-volume-target",
+                    str(sender_config),
+                    "-18",
+                    "standard",
+                    "60",
+                    "1",
+                    "--verify",
+                ],
+                input="numid=1,iface=MIXER,name='mysoftvol'\n"
+                " ; type=INTEGER,access=rw---RW-,values=2,min=0,max=255,step=0\n"
+                f" : values={pair}\n"
+                " | dBscale-min=-51.00dB,step=0.20dB,mute=0\n",
+                text=True,
+                capture_output=True,
+            )
+            assert checked.returncode == expected and not checked.stderr
+            assert checked.stdout == ("177,177\n" if expected == 0 else "")
         profile = runtime / "profile"
         profile.write_text("")
         pcm = bytes(range(256)) * 20

@@ -154,8 +154,106 @@ static int section(struct config *c, int group, int depth) {
     }
 }
 
+struct mixer {
+    long minimum, maximum, bottom, increment, left, right;
+};
+
+static int integer(const char *s, long *value) {
+    if (!*s || strspn(s, "0123456789") != strlen(s))
+        return -1;
+    char *end;
+    errno = 0;
+    *value = strtol(s, &end, 10);
+    return errno || *end || *value < 0 || *value > 65535 ? -1 : 0;
+}
+
+/* amixer renders DB_SCALE's integer centi-dB as exactly two decimals. Do not
+ * round an unknown/sub-centi scale or use floating point to invert the TLV. */
+static int centi_db(const char *s, long *value) {
+    int negative = *s == '-';
+    if (negative)
+        s++;
+    if (!isdigit((unsigned char)*s))
+        return -1;
+    char *end;
+    errno = 0;
+    long whole = strtol(s, &end, 10);
+    if (errno || whole > 200 || *end != '.' || strlen(end + 1) != 2 ||
+        !isdigit((unsigned char)end[1]) || !isdigit((unsigned char)end[2]))
+        return -1;
+    *value = (whole * 100 + (end[1] - '0') * 10 + end[2] - '0') * (negative ? -1 : 1);
+    return 0;
+}
+
+static int only_space(const char *s) {
+    while (isspace((unsigned char)*s))
+        s++;
+    return !*s;
+}
+
+static int mixer_read(struct mixer *m) {
+    char input[16385];
+    size_t size = fread(input, 1, sizeof input, stdin);
+    if (ferror(stdin) || size >= sizeof input || memchr(input, 0, size))
+        return -1;
+    input[size] = 0;
+    unsigned seen = 0;
+    int lines = 0;
+    char *next_line, *line = strtok_r(input, "\n", &next_line);
+    for (; line; line = strtok_r(NULL, "\n", &next_line)) {
+        if (++lines > 32 || strlen(line) >= 511)
+            return -1;
+        if (only_space(line))
+            continue;
+        char a[32], b[32], c[32], d[32], access[16];
+        int end = 0;
+        unsigned bit;
+        long count, raw_step, mute, id;
+        if (sscanf(line, " numid=%31[^,],iface=MIXER,name='mysoftvol'%n", a, &end) == 1 && end) {
+            const char *tail = line + end;
+            if (!strncmp(tail, ",index=0", 8))
+                tail += 8;
+            if (!only_space(tail) || integer(a, &id) || !id)
+                return -1;
+            bit = 1;
+        } else if (
+            sscanf(
+                line,
+                " ; type=INTEGER,access=%15[^,],values=%31[^,],min=%31[^,],max=%31[^,],step=%31s%n",
+                access, a, b, c, d, &end) == 5 &&
+            end) {
+            if (!only_space(line + end) ||
+                (strcmp(access, "rw---RW-") && strcmp(access, "rw---R--")) || integer(a, &count) ||
+                count != 2 || integer(b, &m->minimum) || integer(c, &m->maximum) ||
+                m->maximum <= m->minimum || integer(d, &raw_step) || raw_step > 1)
+                return -1;
+            bit = 2;
+        } else if (sscanf(line, " : values=%31[^,],%31s%n", a, b, &end) == 2 && end) {
+            if (!only_space(line + end) || integer(a, &m->left) || integer(b, &m->right))
+                return -1;
+            bit = 4;
+        } else if (sscanf(line, " | dBscale-min=%31[^d]dB,step=%31[^d]dB,mute=%31s%n", a, b, c,
+                          &end) == 3 &&
+                   end) {
+            if (!only_space(line + end) || centi_db(a, &m->bottom) || m->bottom < -20000 ||
+                m->bottom > 0 || centi_db(b, &m->increment) || m->increment < 1 ||
+                m->increment > 1000 || integer(c, &mute) || mute)
+                return -1;
+            bit = 8;
+        } else
+            return -1;
+        if (seen & bit)
+            return -1;
+        seen |= bit;
+    }
+    return seen != 15 || m->left < m->minimum || m->left > m->maximum || m->right < m->minimum ||
+                   m->right > m->maximum
+               ? -1
+               : 0;
+}
+
 int bridge_airplay_volume_target(const char *path, const char *raw, const char *profile,
-                                 const char *baseline, const char *start) {
+                                 const char *baseline, const char *start, int verify) {
     double volume, saved, ticks;
     if (number(raw, &volume) || (volume != -144 && (volume < -30 || volume > 0)) ||
         number(baseline, &saved) || saved < 0 || saved > 100 || number(start, &ticks) ||
@@ -205,41 +303,18 @@ int bridge_airplay_volume_target(const char *path, const char *raw, const char *
         c.range < 30 || c.range > 150 || (long)c.range != c.range)
         return 2;
 
-    char line[512];
-    int have_name = 0, have_range = 0, have_db = 0, lines = 0;
-    long minimum = 0, maximum = 0;
-    double minimum_db = 0, step = 0;
-    while (fgets(line, sizeof line, stdin)) {
-        if (++lines > 32 || (strlen(line) == sizeof line - 1 && !strchr(line, '\n')))
-            return 2;
-        if (strstr(line, "iface=MIXER,name='mysoftvol'"))
-            have_name++;
-        int channels, mute;
-        long raw_step;
-        if (sscanf(line, " ; type=INTEGER,access=%*[^,],values=%d,min=%ld,max=%ld,step=%ld",
-                   &channels, &minimum, &maximum, &raw_step) == 4) {
-            if (channels != 2 || minimum < 0 || maximum <= minimum || maximum > 65535)
-                return 2;
-            have_range++;
-        }
-        if (sscanf(line, " | dBscale-min=%lfdB,step=%lfdB,mute=%d", &minimum_db, &step, &mute) ==
-            3) {
-            if (mute || !isfinite(minimum_db) || !isfinite(step) || minimum_db < -200 ||
-                minimum_db > 0 || step <= 0 || step > 10)
-                return 2;
-            have_db++;
-        }
-    }
-    if (ferror(stdin) || have_name != 1 || have_range != 1 || have_db != 1)
+    struct mixer mixer = {0};
+    if (mixer_read(&mixer))
         return 2;
-    long bottom = (long)(minimum_db * 100 - 0.5);
-    long increment = (long)(step * 100 + 0.5);
-    long top = bottom + (maximum - minimum) * increment;
+    long bottom = mixer.bottom, increment = mixer.increment;
+    long top = bottom + (mixer.maximum - mixer.minimum) * increment;
     long high = (long)c.maximum * 100, range = (long)(c.range * 100);
     if (increment < 1 || high > top || high < bottom || high - range < bottom)
         return 2;
     if (volume == -144) {
         /* Shairport's software mute remains active; undo only our master cap. */
+        if (verify)
+            return 2;
         printf("%.17g%%\n", saved);
         return 0;
     }
@@ -261,6 +336,14 @@ int bridge_airplay_volume_target(const char *path, const char *raw, const char *
     long target = (long)gain;
     if (target < bottom || target > top)
         return 2;
-    printf("%.2fdB\n", target / 100.0);
+    /* Match snd_tlv_convert_from_dB(..., dir=0), Shairport's first choice:
+     * nearest integer with halfway cases upward. Nonnegative integer math
+     * avoids errors at negative dB boundaries, including odd centi-dB steps. */
+    long offset = target - bottom;
+    long value = mixer.minimum + offset / increment + (2 * (offset % increment) >= increment);
+    if (value < mixer.minimum || value > mixer.maximum ||
+        (verify && (mixer.left != value || mixer.right != value)))
+        return 2;
+    printf("%ld,%ld\n", value, value);
     return 0;
 }

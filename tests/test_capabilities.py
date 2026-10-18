@@ -270,7 +270,9 @@ async def test_pending_volume_recovery_never_commits_temporary_duck_as_desired(h
         state["volume_recovery_pending"] = False
         state["volumes"] = {**STATE["volumes"], "master": 45}
         await c.async_refresh()
-        commit.assert_awaited_once_with([{"target": "master", "level": 45}])
+        commit.assert_awaited_once_with(
+            [{"target": "master", "level": 45}], generation=c.volume.generation
+        )
         assert c.volume.desired["master"] == 45
     assert await hass.config_entries.async_unload(entry.entry_id)
 

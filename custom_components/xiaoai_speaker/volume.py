@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import math
 import re
 import uuid
 from dataclasses import dataclass
@@ -154,14 +156,130 @@ def volume_intent(text: str) -> dict | None:
     return None
 
 
+@dataclass
+class VolumeDisplayRequest:
+    level: float
+    probe: tuple[str, float] | None = None
+    guarded: bool = False
+
+
 class VolumeManager:
-    def __init__(self, hass, entry, client) -> None:
+    def __init__(self, hass, entry, client, on_change=None) -> None:
         self.entry = entry
         self.client = client
         self.store = Store(hass, 1, f"{DOMAIN}.{entry.unique_id}.volume")
         self.desired: dict[str, float] = {}
         self.state: dict = {}
         self.caps: dict = {}
+        self.on_change = on_change
+        self.generation = 0
+        self.write_lock = asyncio.Lock()
+        self._store_lock = asyncio.Lock()
+        self._displayed: dict[str, float | None] = {}
+        # Keep live intents in order, separate from acknowledged intent awaiting
+        # a Probe. Cancelling the newest reveals the previous live intent first.
+        self._requests: dict[str, list[VolumeDisplayRequest]] = {}
+        self._confirmed: dict[str, VolumeDisplayRequest] = {}
+
+    @staticmethod
+    def _valid_level(value) -> bool:
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and 0 <= value <= 100
+            and math.isfinite(value)
+        )
+
+    @staticmethod
+    def _temporary(state: dict) -> bool:
+        return bool(
+            state.get("voice", {}).get("active")
+            or state.get("audio_active")
+            or state.get("volume_recovery_pending")
+        )
+
+    @staticmethod
+    def _probe_key(state: dict) -> tuple[str, float] | None:
+        instance, updated = state.get("instance_id"), state.get("updated")
+        if (
+            isinstance(instance, str)
+            and instance
+            and isinstance(updated, (int, float))
+            and not isinstance(updated, bool)
+            and math.isfinite(updated)
+        ):
+            return instance, updated
+        return None
+
+    def display_level(self, target: str, state: dict) -> float | None:
+        if requests := self._requests.get(target):
+            return requests[-1].level
+        if request := self._confirmed.get(target):
+            return request.level
+        if self._temporary(state):
+            for value in (
+                self.desired.get(target),
+                state.get("voice", {}).get("volumes", {}).get(target),
+                self._displayed.get(target),
+            ):
+                if self._valid_level(value):
+                    return value
+            return None
+        value = self._displayed.get(target, state.get("volumes", {}).get(target))
+        if self._valid_level(value):
+            return value
+        value = self.desired.get(target)
+        return value if self._valid_level(value) else None
+
+    def observe(self, state: dict, generation: int, *, busy: bool = False) -> dict[str, float]:
+        """Accept safe observations; a cached/in-flight Probe cannot undo an intent."""
+        if generation != self.generation:
+            return {}
+        probe = self._probe_key(state)
+        baselines = set()
+        for target, request in self._confirmed.items():
+            if probe is not None and (request.probe is None or request.probe[0] != probe[0]):
+                # Establish the cache boundary from the first response read
+                # after acknowledgement, including null/temporary samples.
+                request.probe, request.guarded = probe, False
+                baselines.add(target)
+        if busy or state.get("state_stale") or self._temporary(state):
+            return {}
+        observed = {}
+        for target, level in state.get("volumes", {}).items():
+            if target in self._requests or not self._valid_level(level):
+                continue
+            if request := self._confirmed.get(target):
+                if (
+                    target in baselines
+                    or probe is None
+                    or request.probe is None
+                    or probe[1] <= request.probe[1]
+                ):
+                    continue
+                if level != request.level and not request.guarded:
+                    # Probe timestamps describe completion, not mixer sampling.
+                    # One Probe may have sampled before the write and completed
+                    # afterwards. Quarantine that conflicting cache generation.
+                    request.probe, request.guarded = probe, True
+                    continue
+                del self._confirmed[target]
+            self._displayed[target] = observed[target] = level
+        return observed
+
+    def _changed(self) -> None:
+        if self.on_change:
+            self.on_change()
+
+    def _remove_request(self, target: str, request: VolumeDisplayRequest) -> bool:
+        requests = self._requests.get(target, [])
+        for index, pending in enumerate(requests):
+            if pending is request:
+                del requests[index]
+                if not requests:
+                    del self._requests[target]
+                return True
+        return False
 
     async def load(self) -> None:
         saved = await self.store.async_load()
@@ -202,20 +320,71 @@ class VolumeManager:
             plan.append({"target": target, "level": level})
         return {"handled": True, "plan": plan, "reply_text": "音量已调整。"}
 
-    async def commit(self, plan: list[dict]) -> None:
+    def acknowledge(self, plan: list[dict]) -> None:
+        """Protect acknowledged targets without another device or storage write."""
+        if not plan:
+            return
         for item in plan:
-            self.desired[item["target"]] = item["level"]
-        await self.store.async_save(self.desired)
+            target, level = item["target"], item["level"]
+            self._displayed[target] = level
+            self._confirmed[target] = VolumeDisplayRequest(level)
+        self.generation += 1
+        self._changed()
+
+    async def commit(
+        self,
+        plan: list[dict],
+        *,
+        generation: int | None = None,
+        acknowledged: bool = False,
+    ) -> None:
+        async with self._store_lock:
+            if generation is not None and generation != self.generation:
+                return
+            desired = {**self.desired, **{item["target"]: item["level"] for item in plan}}
+            try:
+                await self.store.async_save(desired)
+            except OSError:
+                raise BridgeError("state_write_failed") from None
+            self.desired = desired
+            if acknowledged:
+                # LX06 also executes volume plans locally. Its success callback
+                # supersedes older confirmations, without hiding pending HA input.
+                self.acknowledge(plan)
 
     async def set(self, target: str, level: float, *, source: str | None = None) -> dict:
-        if not 0 <= level <= 100:
+        if not self._valid_level(level):
             raise BridgeError("invalid_volume")
         plan = [{"target": t, "level": level} for t in self.targets(target, source)]
-        results = []
+        requests = {}
         for item in plan:
-            results.append(
-                await self.client.volume(item["target"], item["level"], uuid.uuid4().hex)
-            )
-            # Persist only successfully acknowledged channels; expose partial failures.
-            await self.commit([item])
+            channel = item["target"]
+            self._displayed.setdefault(channel, self.display_level(channel, self.state))
+            requests[channel] = VolumeDisplayRequest(level)
+            self._requests.setdefault(channel, []).append(requests[channel])
+        self.generation += 1
+        results = []
+        try:
+            self._changed()
+            async with self.write_lock:
+                for item in plan:
+                    results.append(
+                        await self.client.volume(item["target"], item["level"], uuid.uuid4().hex)
+                    )
+                    # Only acknowledged, durably saved channels become confirmed.
+                    await self.commit([item])
+                    channel = item["target"]
+                    self._displayed[channel] = level
+                    self._confirmed[channel] = requests[channel]
+                    self._remove_request(channel, requests[channel])
+                    self.generation += 1
+                    self._changed()
+        finally:
+            rolled_back = False
+            for channel, request in requests.items():
+                if self._remove_request(channel, request):
+                    rolled_back = True
+            if rolled_back:
+                self.generation += 1
+                self._changed()
         return {"targets": [p["target"] for p in plan], "level": level, "results": results}

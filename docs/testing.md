@@ -8,13 +8,14 @@ CI 使用 Python 3.14、Home Assistant 2026.10.0、官方 HA fixture 的 custom-
 |---|---|
 | `test_homeassistant.py` | config flow、鉴权失败、稳定身份、实体、AirPlay active/MPD stop、无 Linn、服务定位、options、卸载 |
 | `test_volume.py` | 冻结来源、显式目标、空闲策略、并发优先级、AirPlay 双重衰减预检、中英文音量规则 |
+| `test_volume_display.py` | HA 原生 Number/media_player 即时目标、失败/Store 回滚、同/跨通道并发、过期查询与 Probe、空/非法值、语音/Duck 延迟、能力/路由、相对操作、部分成功、取消等待和重启同步；断言控制调用次数及持久值，显示刷新不重发控制 |
 | `test_mpd.py` | 真正 asyncio 原生协议对话、队列、安全转义、ACK、坏参数先验证再清队列 |
 | `test_client.py` | 分段 HTTP、回复上限、不确定 POST 标记 |
 | `test_bridge.py` | 本机真实 C HTTP 进程、认证、阶段状态、忙碌、幂等/冲突、输入/Unicode/HTTP 限制、Unix voice event、取消、多实例 |
 | `test_jobs.py` | 失去接收回应仅查询一次、队列优先级/取消、同活跃文字递归防护、多设备隔离 |
 | `test_text_pipeline.py` | 实际 shell + 真实 curl/本机 HTTP；服务端核对 Agent/Conversation ID、语音↔文字同缓存、滑动/过期、原默认 Agent/无上下文、401 原续期与有界重试、失败不续期/不重复、silent reply、临时音量取消恢复 |
 | `test_ducking.py` | 默认 AirPlay 避让、绝对目标与低音量保护、未知/多源跳过、静默文字不衰减、旧标记忽略、Journal/owner/mixer 失败、音量锁竞争、TERM/KILL 恢复、发送端/HA 新目标保护；原抢占/交接回归继续运行 |
-| `test_airplay_sender_recovery.py` | native/sanitizers 下的 Shairport standard/flat→ALSA dB 目标、共享 mixer PENDING 的真正恢复、连续调音/确认/写失败、写后 SIGKILL、HA 版本、静音/停止、合法 10% 新目标、未知配置及语音交接；ARM/QEMU 另测目标模型 |
+| `test_airplay_sender_recovery.py` | native/sanitizers 下的 Shairport standard/flat→真实 TLV 整数刻度、最近/中点/非零 min/奇数步长、严格 cset 参数契约与两声道读回、无效/重复/越界字段、返回成功却未生效、共享 mixer PENDING 恢复、连续调音/确认/写失败、写后 SIGKILL、HA 版本、静音/停止、合法 10% 新目标、未知配置及语音交接；ARM/QEMU 另测目标和读回验证 |
 | `test_volume_probe.py` | 实际 Probe 在 DBus 期间跨越三类 Journal 恢复边界，HA 不导入旧临时音量；恢复后新音量可导入、锁忙不读取、读取时互斥、DBus 前释放锁、损坏 Journal 保留 |
 | `test_listener_switch.py` | 原生 toggle 的明确目标/幂等、HA 与物理键交替/竞争、真实 bootstrap→KWS Adapter/版本化就绪、HA 实体身份与真实 C Probe 状态、未知/失败/错误目标、忙碌与请求去重，以及内部静默 start/stop/restart；声音和 LED 仅捕获参数 |
 | `test_airplay_metadata.py` / `test_airplay_media_player.py` / `test_airplay_artwork_http.py` | 合成 4.3.5 typed reply、Unicode/畸形/超限、RTP 回绕、GetAll 复用、原 HA 播放器/图片代理、进度与切歌、缓存并发/过期/卸载、认证和路径/文件类型限制、真实 C 分段传输及慢客户端不阻塞语音事件 |
