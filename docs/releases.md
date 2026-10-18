@@ -2,7 +2,7 @@
 
 固定下载入口：[Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases)。HACS 仓库更新方式不变，HA ZIP 用于手工安装。
 
-当前正式版本为 **0.1.9**；本分支准备 **0.2.0** 开发，PR 保持草稿，具体需求见 [开发记录](lx06-v020.md)。v0.1.9 的修复范围、离线证据与待真机验收项目见 [修复记录](lx06-v019.md)。`pyproject.toml`、HA `manifest.json` 和 C `VERSION` 同步更新。正式版本使用 `vX.Y.Z`，预发布使用 `vX.Y.Z-alpha.N`、`-beta.N` 或 `-rc.N`，三个版本字段均须与 tag 的无 v 部分一致。v0.1.8 的离线证据、真机缺口和回退见 [版本说明](lx06-v018.md)。
+当前正式版本为 **0.2.0**，修复 HA 音量显示及 LX06 AirPlay Duck 整数刻度恢复，范围、离线证据、升级回退和待真机验收项目见 [修复记录](lx06-v020.md)。回退基线为 [v0.1.9](lx06-v019.md)。`pyproject.toml`、HA `manifest.json` 和 C `VERSION` 同步更新。正式版本使用 `vX.Y.Z`，预发布使用 `vX.Y.Z-alpha.N`、`-beta.N` 或 `-rc.N`，三个版本字段均须与 tag 的无 v 部分一致。v0.1.8 的离线证据、真机缺口和回退见 [版本说明](lx06-v018.md)。
 
 推送已有 `v*` tag 后，CI 在 tag 的同一提交执行 Python/元数据/隐私/ShellCheck、原生 C 与 ASan/UBSan、真实 BusyBox ash 及 LX06 结构/故障测试、ARM 静态交叉编译/ELF 检查/QEMU CLI 与 HTTP/worker、HACS 和 hassfest。全部通过后才运行发布 job。普通分支或 PR 构建不会发布。
 
