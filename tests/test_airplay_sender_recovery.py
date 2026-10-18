@@ -29,9 +29,20 @@ CONTROL = """numid=1,iface=MIXER,name='mysoftvol'
 """
 
 
-def gain(binary, path, raw, profile="standard", baseline="60", control=CONTROL, start="1"):
+def gain(
+    binary, path, raw, profile="standard", baseline="60", control=CONTROL, start="1", verify=False
+):
     return subprocess.run(
-        [str(binary), "--airplay-volume-target", str(path), raw, profile, baseline, start],
+        [
+            str(binary),
+            "--airplay-volume-target",
+            str(path),
+            raw,
+            profile,
+            baseline,
+            start,
+            *(["--verify"] if verify else []),
+        ],
         input=control,
         capture_output=True,
         text=True,
@@ -48,17 +59,17 @@ def config_file(path, source=CONFIG):
 @pytest.mark.parametrize(
     "raw,target",
     [
-        ("-30", "-34.00dB"),
-        ("-29", "-31.69dB"),
-        ("-25", "-22.46dB"),
-        ("-20", "-17.50dB"),
-        ("-18", "-15.70dB"),
-        ("-17", "-14.80dB"),
-        ("-15", "-13.00dB"),
-        ("-10", "-9.00dB"),
-        ("-6", "-7.00dB"),
-        ("-5", "-6.50dB"),
-        ("0", "-4.00dB"),
+        ("-30", "85,85"),
+        ("-29", "97,97"),
+        ("-25", "143,143"),
+        ("-20", "168,168"),
+        ("-18", "177,177"),
+        ("-17", "181,181"),
+        ("-15", "190,190"),
+        ("-10", "210,210"),
+        ("-6", "220,220"),
+        ("-5", "223,223"),
+        ("0", "235,235"),
         ("-144", "60%"),
     ],
 )
@@ -70,12 +81,86 @@ def test_standard_gain_uses_shairport_centi_db_taper_not_linear_percent(
     assert result.stdout.strip() == target
 
 
-@pytest.mark.parametrize("raw,target", [("-30", "-34.00dB"), ("-18", "-22.00dB"), ("0", "-4.00dB")])
+@pytest.mark.parametrize("raw,target", [("-30", "85,85"), ("-18", "145,145"), ("0", "235,235")])
 def test_flat_profile_is_taken_from_current_dbus_not_cached_config(
     json_binary, tmp_path, raw, target
 ):
     result = gain(json_binary, config_file(tmp_path / "sps.conf"), raw, "flat")
     assert result.returncode == 0 and result.stdout.strip() == target
+
+
+@pytest.mark.parametrize(
+    "control,target",
+    [
+        (CONTROL, 177),  # -15.70 dB is halfway: round up to -15.60 dB.
+        (CONTROL.replace("-51.00dB", "-50.99dB"), 176),
+        (CONTROL.replace("-51.00dB", "-51.01dB"), 177),
+        (CONTROL.replace("-51.00dB", "-51.08dB").replace("0.20dB", "0.21dB"), 168),
+        (CONTROL.replace("-51.00dB", "-51.09dB").replace("0.20dB", "0.21dB"), 169),
+        (CONTROL.replace("min=0,max=255", "min=10,max=265"), 187),
+        (CONTROL.replace("max=255", "max=510").replace("0.20dB", "0.10dB"), 353),
+        (CONTROL.replace("step=0\n", "step=1\n"), 177),
+        (CONTROL.replace("rw---RW-", "rw---R--"), 177),
+        (CONTROL.replace("name='mysoftvol'", "name='mysoftvol',index=0"), 177),
+    ],
+)
+def test_integer_target_uses_exact_tlv_range_and_alsa_nearest_rounding(
+    json_binary, tmp_path, control, target
+):
+    result = gain(json_binary, config_file(tmp_path / "sps.conf"), "-18", control=control)
+    assert result.returncode == 0 and result.stdout == f"{target},{target}\n"
+
+
+@pytest.mark.parametrize(
+    "control",
+    [
+        CONTROL.replace("max=255", "max=0"),
+        CONTROL.replace("min=0", "min=-1"),
+        CONTROL.replace("max=255", "max=65536"),
+        CONTROL.replace("min=0", "min=99999999999999999999999999999"),
+        CONTROL.replace("step=0\n", "step=2\n"),
+        CONTROL.replace("step=0\n", "step=-1\n"),
+        CONTROL.replace("values=2,min", "values=4294967298,min"),
+        CONTROL.replace("26,26", "26"),
+        CONTROL.replace("26,26", "26,26,26"),
+        CONTROL.replace("26,26", "-1,26"),
+        CONTROL.replace("26,26", "26,256"),
+        CONTROL.replace("26,26", "26.0,26"),
+        CONTROL.replace("26,26", "26,26garbage"),
+        CONTROL.replace("  : values=26,26\n", ""),
+        CONTROL.replace("rw---RW-", "r----R--"),
+        CONTROL.replace("0.20dB", "0.205dB"),
+        CONTROL.replace("-51.00dB", "-51.001dB"),
+        CONTROL.replace("name='mysoftvol'", "name='mysoftvol',index=1"),
+        CONTROL.replace("name='mysoftvol'", "name='mysoftvol',device=1"),
+        CONTROL.replace("type=INTEGER", "type=INTEGER64"),
+        CONTROL.replace(" : values=26,26", " : values=26,26\n : values=26,26"),
+        CONTROL.replace("mute=0", "mute=0 trailing"),
+        CONTROL + "\0hidden",
+    ],
+)
+def test_unsupported_or_malformed_control_cannot_produce_a_raw_write(
+    json_binary, tmp_path, control
+):
+    result = gain(json_binary, config_file(tmp_path / "sps.conf"), "-18", control=control)
+    assert result.returncode == 2 and not result.stdout
+
+
+@pytest.mark.parametrize(
+    "pair,success", [("177,177", True), ("176,177", False), ("177,176", False), ("26,26", False)]
+)
+def test_verify_requires_both_channels_at_the_quantized_target(
+    json_binary, tmp_path, pair, success
+):
+    result = gain(
+        json_binary,
+        config_file(tmp_path / "sps.conf"),
+        "-18",
+        control=CONTROL.replace("26,26", pair),
+        verify=True,
+    )
+    assert result.returncode == (0 if success else 2)
+    assert result.stdout == ("177,177\n" if success else "")
 
 
 @pytest.mark.parametrize(
@@ -166,7 +251,7 @@ def test_supported_comments_and_unrelated_config_sections_are_not_interpreted(
         + 'pipe = { name="synthetic"; }; diagnostics={ log_verbosity=0; };'
     )
     result = gain(json_binary, config_file(tmp_path / "sps.conf", source), "-6")
-    assert result.returncode == 0 and result.stdout.strip() == "-7.00dB"
+    assert result.returncode == 0 and result.stdout.strip() == "220,220"
 
 
 def install_shared_mixer(path):
@@ -208,14 +293,32 @@ printf 'string "Version"\\nvariant string "4.3.5"\\nstring "VolumeControlProfile
     script(
         mixer,
         """#!/bin/sh
-if [ "$1" = cget ];then cat "$STATE_DIR/sps-control";exit;fi
-[ "$1" != -- ] || shift
-case "$1:$2:$3" in
- sset:mysoftvol:*dB)
+{ printf '%s\\t' "$@";printf '\\n'; } >> "$STATE_DIR/amixer-commands"
+# Match the LX06 command contract. Do not silently accept GNU-style -- or dB.
+[ "$1" != -- ] || exit 1
+case "${3:-}" in *dB) exit 1;;esac
+if [ "$1" = cget ];then
+ [ "$#" = 2 ] && [ "$2" = name=mysoftvol ] || exit 1
+ if [ -f "$STATE_DIR/gain-written" ];then
+   [ ! -f "$STATE_DIR/fail-gain-read" ] || exit 1
+   if [ -f "$STATE_DIR/readback-control" ];then cat "$STATE_DIR/readback-control";exit;fi
+ fi
+ pair=26,26;[ ! -r "$STATE_DIR/mixer-raw-mysoftvol" ] || read pair < "$STATE_DIR/mixer-raw-mysoftvol"
+ awk -v pair="$pair" '{if($0 ~ /^  : values=/)print "  : values=" pair;else print}' "$STATE_DIR/sps-control"
+ exit
+fi
+case "$1:$2" in
+ cset:name=mysoftvol)
+   [ "$#" = 3 ] || exit 1
+   printf '%s\\n' "$3" | awk -F, 'NF!=2 || $1 !~ /^(0|[1-9][0-9]*)$/ || $2 !~ /^(0|[1-9][0-9]*)$/ || $1>255 || $2>255 {exit 1}' || exit 1
    [ ! -f "$STATE_DIR/fail-gain-write" ] || exit 1
-   printf '%s %s\\n' "$2" "$3" >> "$STATE_DIR/mixer-writes"
-   case "$3" in -7.00dB) level=86;; -9.00dB) level=82;; -45.88dB) level=10;; *) exit 1;; esac
-   printf '%s\\n' "$level" > "$STATE_DIR/mixer-mysoftvol"
+   printf 'mysoftvol %s\\n' "$3" >> "$STATE_DIR/mixer-writes"
+   if [ ! -f "$STATE_DIR/no-effect-cset" ];then
+     printf '%s\\n' "$3" > "$STATE_DIR/mixer-raw-mysoftvol"
+     level=$(printf '%s\\n' "$3" | awk -F, '{print int($1*100/255+0.5)}')
+     printf '%s\\n' "$level" > "$STATE_DIR/mixer-mysoftvol"
+   fi
+   touch "$STATE_DIR/gain-written"
    if [ -f "$STATE_DIR/change-during-write" ];then
      rm "$STATE_DIR/change-during-write";printf '%s\\n' -10 > "$STATE_DIR/sender-raw"
    fi
@@ -226,9 +329,18 @@ case "$1:$2:$3" in
      rm "$STATE_DIR/query-fails-after-write";touch "$STATE_DIR/fail-query"
    fi
    if [ -f "$STATE_DIR/hold-after-write" ];then
-     touch "$STATE_DIR/gain-written";sleep 30
+     sleep 30
    fi
    exit 0;;
+ sset:*)
+   [ "$#" = 3 ] || exit 1
+   printf '%s\\n' "$3" | grep -Eq '^[0-9]+([.][0-9]+)?%$' || exit 1
+   if [ "$2" = mysoftvol ];then
+     pair=$(LC_ALL=C awk -v percent="${3%?}" 'BEGIN{v=int(percent*255/100+0.5);printf "%d,%d",v,v}')
+     printf '%s\\n' "$pair" > "$STATE_DIR/mixer-raw-mysoftvol"
+   fi;;
+ get:*) [ "$#" = 2 ] || exit 1;;
+ *) exit 1;;
 esac
 exec "$STATE_DIR/tools/original-amixer" "$@"
 """,
@@ -264,6 +376,97 @@ def recover(path, env, speaker_shell):
         text=True,
         timeout=10,
     )
+
+
+@pytest.mark.parametrize("kind", ["duck", "voice-volume"])
+def test_real_lx06_pending_uses_integer_stereo_write_and_readback(text_device, speaker_shell, kind):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path, sender_recovery=True, volumes={"master": 69})
+    if kind != "duck":
+        journal = journal.rename(path / f"xiaoai_bridge.{kind}.json")
+    (path / "sender-raw").write_text("-18\n")
+    result = recover(path, env, speaker_shell)
+    assert result.returncode == 0, result.stderr
+    assert not journal.exists()
+    assert (path / "mixer-raw-mysoftvol").read_text().strip() == "177,177"
+    assert (path / "mixer-mysoftvol").read_text().strip() == "69"
+    commands = (path / "amixer-commands").read_text().splitlines()
+    write = commands.index("cset\tname=mysoftvol\t177,177\t")
+    assert commands[write + 1] == "cget\tname=mysoftvol\t"
+    assert (path / "sender-raw").read_text().strip() == "-18"
+    assert not (path / "sender-write-attempted").exists()
+
+
+@pytest.mark.parametrize(
+    "arguments", [["--", "sset", "mysoftvol", "-45.80dB"], ["sset", "mysoftvol", "-45.80dB"]]
+)
+def test_transport_fixture_cannot_silently_accept_db_writes(text_device, arguments):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    # Only the integer cset contract is confirmed. Reject unverified dB
+    # alternatives too, so this fixture cannot accidentally certify them.
+    result = subprocess.run([str(path / "tools/amixer"), *arguments], env=env, capture_output=True)
+    assert result.returncode == 1
+    assert not (path / "mixer-writes").exists()
+
+
+def test_lx06_confirmed_cset_form_accepts_two_raw_integer_channels(text_device):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    result = subprocess.run(
+        [str(path / "tools/amixer"), "cset", "name=mysoftvol", "26,26"],
+        env=env,
+        capture_output=True,
+    )
+    assert result.returncode == 0
+    assert (path / "mixer-raw-mysoftvol").read_text().strip() == "26,26"
+    assert (path / "mixer-mysoftvol").read_text().strip() == "10"
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "no-effect-cset",
+        "fail-gain-read",
+        "wrong-right",
+        "wrong-left",
+        "wrong-tlv",
+        "malformed-control",
+    ],
+)
+def test_cset_success_without_valid_stereo_readback_retains_journal_and_retries(
+    text_device, speaker_shell, fault
+):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path, sender_recovery=True, volumes={"master": 69, "tts": 55})
+    (path / "sender-raw").write_text("-18\n")
+    if fault in ("no-effect-cset", "fail-gain-read"):
+        marker = path / fault
+        marker.touch()
+    else:
+        marker = path / "readback-control"
+        control = CONTROL.replace("26,26", "177,177")
+        if fault == "wrong-right":
+            control = control.replace("177,177", "177,26")
+        elif fault == "wrong-left":
+            control = control.replace("177,177", "26,177")
+        elif fault == "wrong-tlv":
+            control = control.replace("0.20dB", "0.10dB").replace("max=255", "max=510")
+        else:
+            control = control.replace("values=2,min", "values=1,min")
+        marker.write_text(control)
+    assert recover(path, env, speaker_shell).returncode != 0
+    saved = json.loads(journal.read_text())
+    assert saved["sender_recovery"] is True and saved["volumes"] == {"master": 69}
+    assert (path / "mixer-notifyvol").read_text().strip() == "55"
+    assert (path / "sender-raw").read_text().strip() == "-18"
+    assert not (path / "sender-write-attempted").exists()
+    marker.unlink()
+    assert recover(path, env, speaker_shell).returncode == 0
+    assert not journal.exists()
+    assert (path / "mixer-raw-mysoftvol").read_text().strip() == "177,177"
 
 
 @pytest.mark.parametrize("kind", ["duck", "voice-volume"])
@@ -334,7 +537,10 @@ def test_newer_ha_master_wins_over_interrupted_sender_repair(text_device, speake
     result = recover(path, env, speaker_shell)
     assert result.returncode == 0 and not journal.exists()
     assert (path / "mixer-mysoftvol").read_text().strip() == "75"
-    assert "dB" not in (path / "mixer-writes").read_text()
+    assert (path / "mixer-writes").read_text().splitlines() == ["mysoftvol 75%"]
+    assert not any(
+        line.startswith("cset\t") for line in (path / "amixer-commands").read_text().splitlines()
+    )
 
 
 def test_sender_can_intentionally_choose_the_same_ten_percent_as_the_cap(
@@ -348,7 +554,7 @@ def test_sender_can_intentionally_choose_the_same_ten_percent_as_the_cap(
     result = recover(path, env, speaker_shell)
     assert result.returncode == 0 and not journal.exists()
     assert (path / "mixer-mysoftvol").read_text().strip() == "10"
-    assert (path / "mixer-writes").read_text().splitlines() == ["mysoftvol -45.88dB"]
+    assert (path / "mixer-writes").read_text().splitlines() == ["mysoftvol 26,26"]
 
 
 def test_main_volume_alone_is_not_a_completed_shairport_gain_update(text_device, speaker_shell):

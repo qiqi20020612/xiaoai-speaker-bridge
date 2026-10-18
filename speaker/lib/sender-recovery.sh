@@ -59,21 +59,33 @@ EOF
         ;;
     esac
     bridge_owner_alive "$sender_pid" "$sender_start" || exit 1
-    printf '%s\n%s\n%s\n%s\n' "$sender_target" "$sender_pid" "$sender_start" "$sender_profile"
+    printf '%s\n%s\n%s\n%s\n%s\n' "$sender_target" "$sender_pid" "$sender_start" "$sender_profile" "$sender_config"
 )
 
 # Runs only inside the caller's volume-locked recovery subshell.
 bridge_sender_restore() {
     recovery_file=$1;recovery_ap=$2;recovery_raw=$3;recovery_active=$4
     sender_result=$(bridge_sender_target) || { return 1; }
-    { IFS= read -r sender_target;IFS= read -r sender_pid;IFS= read -r sender_start;IFS= read -r sender_profile; } <<EOF
+    { IFS= read -r sender_target;IFS= read -r sender_pid;IFS= read -r sender_start;IFS= read -r sender_profile;IFS= read -r sender_config || sender_config=''; } <<EOF
 $sender_result
 EOF
     # Commit before writing: SIGKILL or another slider update must not
     # turn our own repair into an untracked, apparently external value.
     sender_marked=$(bridge_json sender-recovery < "$recovery_file") || return 1
     atomic_json "$recovery_file" "$sender_marked" || return 1
-    if ! amixer -- sset mysoftvol "$sender_target" >/dev/null 2>&1; then return 1;fi
+    case "$sender_target" in
+        *%) amixer sset mysoftvol "$sender_target" >/dev/null 2>&1 || return 1 ;;
+        *)
+            # LX06's amixer does not accept the former negative-dB sset form.
+            # The helper returns two canonical integers from the actual TLV.
+            amixer cset name=mysoftvol "$sender_target" >/dev/null 2>&1 || return 1
+            sender_control=$(amixer cget name=mysoftvol 2>/dev/null) || return 1
+            # The saved percentage is unused for non-mute raw-gain validation.
+            sender_verified=$(printf '%s\n' "$sender_control" | "$BRIDGE_JSON_BIN" --airplay-volume-target \
+                "$sender_config" "$recovery_raw" "$sender_profile" 0 "$sender_start" --verify) || return 1
+            [ "$sender_verified" = "$sender_target" ] || return 1
+            ;;
+    esac
     sender_after=$(dbus_get_all org.gnome.ShairportSync) || sender_after=''
     sender_after_fields=$(printf '%s' "$sender_after" | dbus_property Volume Active)
     { IFS= read -r sender_after_raw;IFS= read -r sender_after_active || sender_after_active=''; } <<EOF
