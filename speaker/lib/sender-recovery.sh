@@ -78,7 +78,8 @@ EOF
         sender_remote=$(dbus_get_all org.gnome.ShairportSync.RemoteControl) || return 1
         sender_before_remote=$(printf '%s' "$sender_remote" | dbus_property AirplayVolume)
         [ -n "$sender_before_remote" ] &&
-            printf '%s' "$sender_before_remote" | jq -e 'type=="number" and ((isnan or isinfinite)|not)' >/dev/null 2>&1 || return 1
+            printf '%s' "$sender_before_remote" | jq -e \
+                'type=="number" and ((isnan or isinfinite)|not) and (.==-144 or (.>=-30 and .<=0))' >/dev/null 2>&1 || return 1
         case "$sender_target" in *%)
             printf '%s' "$sender_before_remote" | jq -e '.==-144' >/dev/null 2>&1 || return 1 ;;
         esac
