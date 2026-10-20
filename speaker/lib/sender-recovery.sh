@@ -69,6 +69,30 @@ bridge_sender_restore() {
     { IFS= read -r sender_target;IFS= read -r sender_pid;IFS= read -r sender_start;IFS= read -r sender_profile;IFS= read -r sender_config || sender_config=''; } <<EOF
 $sender_result
 EOF
+    sender_before_remote=$recovery_raw
+    if [ "$sender_profile" != none ]; then
+        # 4.3.5's metadata hub samples config.airplay_volume, not the pvol
+        # payload. That sample can precede the player's config update and stay
+        # stale. Track Remote changes across this repair instead of treating
+        # Remote == main (or a rounded main) as an application acknowledgement.
+        sender_remote=$(dbus_get_all org.gnome.ShairportSync.RemoteControl) || return 1
+        sender_before_remote=$(printf '%s' "$sender_remote" | dbus_property AirplayVolume)
+        [ -n "$sender_before_remote" ] &&
+            printf '%s' "$sender_before_remote" | jq -e 'type=="number" and ((isnan or isinfinite)|not)' >/dev/null 2>&1 || return 1
+        case "$sender_target" in *%)
+            printf '%s' "$sender_before_remote" | jq -e '.==-144' >/dev/null 2>&1 || return 1 ;;
+        esac
+        # Target calculation and the Remote read may overlap another slider
+        # update. Refuse a known-stale write, then check main again afterwards.
+        sender_before=$(dbus_get_all org.gnome.ShairportSync) || return 1
+        sender_before_fields=$(printf '%s' "$sender_before" | dbus_property Volume Active)
+        { IFS= read -r sender_before_raw;IFS= read -r sender_before_active || sender_before_active=''; } <<EOF
+$sender_before_fields
+EOF
+        [ -n "$sender_before_raw" ] && [ "$sender_before_active" = "$recovery_active" ] &&
+            printf '%s' "$sender_before_raw" | jq -e --argjson expected "$recovery_raw" \
+                'type=="number" and .==$expected' >/dev/null 2>&1 || return 1
+    fi
     # Commit before writing: SIGKILL or another slider update must not
     # turn our own repair into an untracked, apparently external value.
     sender_marked=$(bridge_json sender-recovery < "$recovery_file") || return 1
@@ -86,6 +110,15 @@ EOF
             [ "$sender_verified" = "$sender_target" ] || return 1
             ;;
     esac
+    # Remote may remain unchanged or catch up to this exact main value. A
+    # different update is ambiguous: retain the Journal for a fresh attempt.
+    sender_after_remote=$sender_before_remote
+    if [ "$sender_profile" != none ]; then
+        sender_remote=$(dbus_get_all org.gnome.ShairportSync.RemoteControl) || return 1
+        sender_after_remote=$(printf '%s' "$sender_remote" | dbus_property AirplayVolume)
+    fi
+    # Read main after Remote so a sender change during that query is not hidden
+    # by a previously sampled main value and a still-stale metadata property.
     sender_after=$(dbus_get_all org.gnome.ShairportSync) || sender_after=''
     sender_after_fields=$(printf '%s' "$sender_after" | dbus_property Volume Active)
     { IFS= read -r sender_after_raw;IFS= read -r sender_after_active || sender_after_active=''; } <<EOF
@@ -95,19 +128,13 @@ EOF
     { IFS= read -r sender_after_version;IFS= read -r sender_after_profile || sender_after_profile=''; } <<EOF
 $sender_after_info
 EOF
-    # RemoteControl is published from volume metadata after Shairport applies
-    # its gain, rounded to two decimals by player_send_volume_metadata(). Main
-    # Volume must still match exactly; do not round away a concurrent update.
-    sender_committed=$recovery_raw
-    if [ "$sender_profile" != none ]; then
-        sender_remote=$(dbus_get_all org.gnome.ShairportSync.RemoteControl) || sender_remote=''
-        sender_committed=$(printf '%s' "$sender_remote" | dbus_property AirplayVolume)
-    fi
     if [ "$sender_after_active" != "$recovery_active" ] ||
+       [ -z "$sender_after_raw" ] || [ -z "$sender_after_remote" ] ||
        ! printf '%s' "$sender_after_raw" | jq -e 'type=="number" and ((isnan or isinfinite)|not)' >/dev/null 2>&1 ||
-       ! printf '%s' "$sender_committed" | jq -e 'type=="number" and ((isnan or isinfinite)|not)' >/dev/null 2>&1 ||
-       ! LC_ALL=C awk -v before="$recovery_raw" -v after="$sender_after_raw" -v committed="$sender_committed" -v profile="$sender_profile" \
-           'BEGIN{expected=(profile=="none" ? before+0 : sprintf("%.2f",before)+0);exit !(after!="" && committed!="" && before+0==after+0 && expected==committed+0)}' ||
+       ! printf '%s' "$sender_after_remote" | jq -e 'type=="number" and ((isnan or isinfinite)|not)' >/dev/null 2>&1 ||
+       ! LC_ALL=C awk -v before="$recovery_raw" -v after="$sender_after_raw" \
+           -v remote_before="$sender_before_remote" -v remote_after="$sender_after_remote" \
+           'BEGIN{exit !(before+0==after+0 && (remote_before+0==remote_after+0 || before+0==remote_after+0))}' ||
        { [ "$sender_profile" != none ] &&
          { [ "$sender_after_version" != 4.3.5 ] || [ "$sender_after_profile" != "$sender_profile" ] ||
            ! bridge_owner_alive "$sender_pid" "$sender_start"; }; }; then
