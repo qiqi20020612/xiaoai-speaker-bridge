@@ -279,12 +279,30 @@ if [ -f "$STATE_DIR/fail-query" ];then exit 1;fi
 raw=-18;[ ! -r "$STATE_DIR/sender-raw" ] || read raw < "$STATE_DIR/sender-raw"
 active=true;[ ! -r "$STATE_DIR/sender-active" ] || read active < "$STATE_DIR/sender-active"
 profile=standard;[ ! -r "$STATE_DIR/sender-profile" ] || read profile < "$STATE_DIR/sender-profile"
+version=4.3.5;[ ! -r "$STATE_DIR/sender-version" ] || read version < "$STATE_DIR/sender-version"
 case "$*" in *string:org.gnome.ShairportSync.RemoteControl*)
- committed=$(LC_ALL=C awk -v raw="$raw" 'BEGIN{printf "%.2f",raw}')
+ [ ! -f "$STATE_DIR/fail-remote-query" ] || exit 1
+ committed=$raw
  [ ! -r "$STATE_DIR/committed-raw" ] || read committed < "$STATE_DIR/committed-raw"
- printf 'string "AirplayVolume"\\nvariant double %s\\n' "$committed";exit;;esac
+ printf 'string "AirplayVolume"\\nvariant double %s\\n' "$committed"
+ if [ -f "$STATE_DIR/next-remote-read" ];then
+   mv "$STATE_DIR/next-remote-read" "$STATE_DIR/committed-raw"
+ fi
+ if [ -f "$STATE_DIR/raw-after-remote" ];then
+   mv "$STATE_DIR/raw-after-remote" "$STATE_DIR/sender-raw"
+   if [ -f "$STATE_DIR/mixer-after-remote" ];then
+     mv "$STATE_DIR/mixer-after-remote" "$STATE_DIR/mixer-raw-mysoftvol"
+   fi
+ fi
+ if [ -f "$STATE_DIR/gain-written" ] && [ -f "$STATE_DIR/raw-after-final-remote" ];then
+   mv "$STATE_DIR/raw-after-final-remote" "$STATE_DIR/sender-raw"
+   if [ -f "$STATE_DIR/mixer-after-final-remote" ];then
+     mv "$STATE_DIR/mixer-after-final-remote" "$STATE_DIR/mixer-raw-mysoftvol"
+   fi
+ fi
+ exit;;esac
 printf 'string "Active"\\nvariant boolean %s\\nstring "Volume"\\nvariant double %s\\n' "$active" "$raw"
-printf 'string "Version"\\nvariant string "4.3.5"\\nstring "VolumeControlProfile"\\nvariant string "%s"\\n' "$profile"
+printf 'string "Version"\\nvariant string "%s"\\nstring "VolumeControlProfile"\\nvariant string "%s"\\n' "$version" "$profile"
 """,
     )
     mixer = path / "tools/amixer"
@@ -325,6 +343,14 @@ case "$1:$2" in
    if [ -f "$STATE_DIR/next-raw" ];then
      mv "$STATE_DIR/next-raw" "$STATE_DIR/sender-raw"
    fi
+   if [ -f "$STATE_DIR/next-committed-raw" ];then
+     mv "$STATE_DIR/next-committed-raw" "$STATE_DIR/committed-raw"
+   fi
+   for field in active profile version;do
+     if [ -f "$STATE_DIR/next-sender-$field" ];then
+       mv "$STATE_DIR/next-sender-$field" "$STATE_DIR/sender-$field"
+     fi
+   done
    if [ -f "$STATE_DIR/query-fails-after-write" ];then
      rm "$STATE_DIR/query-fails-after-write";touch "$STATE_DIR/fail-query"
    fi
@@ -395,6 +421,34 @@ def test_real_lx06_pending_uses_integer_stereo_write_and_readback(text_device, s
     write = commands.index("cset\tname=mysoftvol\t177,177\t")
     assert commands[write + 1] == "cget\tname=mysoftvol\t"
     assert (path / "sender-raw").read_text().strip() == "-18"
+    assert not (path / "sender-write-attempted").exists()
+
+
+@pytest.mark.parametrize("kind", ["duck", "voice-volume"])
+@pytest.mark.parametrize("already_applied", [False, True])
+def test_lx06_main_minus18_remote_minus19_875_finishes_verified_recovery(
+    text_device, speaker_shell, kind, already_applied
+):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path, sender_recovery=True, volumes={"master": 69})
+    if kind != "duck":
+        journal = journal.rename(path / f"xiaoai_bridge.{kind}.json")
+    (path / "sender-raw").write_text("-18\n")
+    (path / "committed-raw").write_text("-19.875\n")
+    if already_applied:
+        (path / "mixer-raw-mysoftvol").write_text("177,177\n")
+        (path / "mixer-mysoftvol").write_text("69\n")
+    result = recover(path, env, speaker_shell)
+    assert result.returncode == 0, result.stderr
+    assert not journal.exists()
+    assert (path / "mixer-raw-mysoftvol").read_text().strip() == "177,177"
+    assert (path / "mixer-writes").read_text().splitlines() == ["mysoftvol 177,177"]
+    commands = (path / "amixer-commands").read_text().splitlines()
+    write = commands.index("cset\tname=mysoftvol\t177,177\t")
+    assert commands[write + 1] == "cget\tname=mysoftvol\t"
+    assert (path / "sender-raw").read_text().strip() == "-18"
+    assert (path / "committed-raw").read_text().strip() == "-19.875"
     assert not (path / "sender-write-attempted").exists()
 
 
@@ -557,28 +611,159 @@ def test_sender_can_intentionally_choose_the_same_ten_percent_as_the_cap(
     assert (path / "mixer-writes").read_text().splitlines() == ["mysoftvol 26,26"]
 
 
-def test_main_volume_alone_is_not_a_completed_shairport_gain_update(text_device, speaker_shell):
+@pytest.mark.parametrize(
+    "fault",
+    ["fail-remote-query", "invalid-remote", "missing-remote", "-30.001", "0.001", "-145", "nan"],
+)
+def test_unknown_remote_observation_retains_journal_without_writing(
+    text_device, speaker_shell, fault
+):
     _, path, env = text_device
     install_shared_mixer(path)
-    journal = pending_journal(path)
-    (path / "committed-raw").write_text("-18\n")
+    journal = pending_journal(path, sender_recovery=True)
+    if fault == "fail-remote-query":
+        marker = path / fault
+        marker.touch()
+    else:
+        marker = path / "committed-raw"
+        marker.write_text(
+            {"invalid-remote": "invalid", "missing-remote": ""}.get(fault, fault) + "\n"
+        )
     assert recover(path, env, speaker_shell).returncode != 0
     assert json.loads(journal.read_text())["sender_recovery"] is True
-    (path / "committed-raw").write_text("-6.0\n")
+    assert not (path / "mixer-writes").exists()
+    marker.unlink()
     assert recover(path, env, speaker_shell).returncode == 0
     assert not journal.exists()
+    assert not (path / "sender-write-attempted").exists()
 
 
+@pytest.mark.parametrize("before", ["-19.875", "-30", "0", "-144"])
+@pytest.mark.parametrize(
+    "after,success", [("-18", True), ("-18.0", True), ("-12", False), ("-19.876", False)]
+)
+def test_remote_may_stay_stale_or_catch_up_but_another_update_retains_journal(
+    text_device, speaker_shell, before, after, success
+):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path, sender_recovery=True)
+    (path / "sender-raw").write_text("-18\n")
+    (path / "committed-raw").write_text(before + "\n")
+    (path / "next-committed-raw").write_text(after + "\n")
+    result = recover(path, env, speaker_shell)
+    assert (result.returncode == 0) is success
+    assert journal.exists() is not success
+    if not success:
+        assert json.loads(journal.read_text())["sender_recovery"] is True
+        assert recover(path, env, speaker_shell).returncode == 0
+        assert not journal.exists()
+    assert (path / "mixer-raw-mysoftvol").read_text().strip() == "177,177"
+    assert (path / "sender-raw").read_text().strip() == "-18"
+    assert not (path / "sender-write-attempted").exists()
+
+
+@pytest.mark.parametrize("when", ["before-write", "during-write", "after-remote"])
+def test_latest_main_change_is_rejected_even_while_remote_stays_at_previous_value(
+    text_device, speaker_shell, when
+):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path, sender_recovery=True)
+    (path / "sender-raw").write_text("-18\n")
+    (path / "committed-raw").write_text("-19.875\n")
+    if when == "during-write":
+        (path / "next-raw").write_text("-10\n")
+    else:
+        suffix = "remote" if when == "before-write" else "final-remote"
+        (path / f"raw-after-{suffix}").write_text("-10\n")
+        (path / f"mixer-after-{suffix}").write_text("210,210\n")
+    assert recover(path, env, speaker_shell).returncode != 0
+    assert json.loads(journal.read_text())["sender_recovery"] is True
+    assert (path / "sender-raw").read_text().strip() == "-10"
+    if when == "before-write":
+        assert not (path / "mixer-writes").exists()
+    if when != "during-write":
+        assert (path / "mixer-raw-mysoftvol").read_text().strip() == "210,210"
+    assert recover(path, env, speaker_shell).returncode == 0
+    assert not journal.exists()
+    assert (path / "mixer-raw-mysoftvol").read_text().strip() == "210,210"
+    assert (path / "sender-raw").read_text().strip() == "-10"
+    assert not (path / "sender-write-attempted").exists()
+
+
+@pytest.mark.parametrize("after", ["", "invalid", "nan"])
+def test_missing_or_invalid_postwrite_remote_keeps_recovery_intent(
+    text_device, speaker_shell, after
+):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path, sender_recovery=True)
+    (path / "sender-raw").write_text("-18\n")
+    (path / "committed-raw").write_text("-19.875\n")
+    (path / "next-committed-raw").write_text(after + "\n")
+    assert recover(path, env, speaker_shell).returncode != 0
+    assert json.loads(journal.read_text())["sender_recovery"] is True
+    (path / "committed-raw").write_text("-19.875\n")
+    assert recover(path, env, speaker_shell).returncode == 0
+    assert not journal.exists()
+    assert not (path / "sender-write-attempted").exists()
+
+
+@pytest.mark.parametrize(
+    "field,value", [("active", "false"), ("version", "4.3.6"), ("profile", "flat")]
+)
+def test_stable_stale_remote_cannot_hide_shairport_state_changes(
+    text_device, speaker_shell, field, value
+):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path, sender_recovery=True)
+    (path / "sender-raw").write_text("-18\n")
+    (path / "committed-raw").write_text("-19.875\n")
+    (path / f"next-sender-{field}").write_text(value + "\n")
+    assert recover(path, env, speaker_shell).returncode != 0
+    assert json.loads(journal.read_text())["sender_recovery"] is True
+    assert not (path / "sender-write-attempted").exists()
+
+
+def test_stable_stale_remote_cannot_hide_changed_process_starttime(text_device, speaker_shell):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path, sender_recovery=True)
+    (path / "sender-raw").write_text("-18\n")
+    (path / "committed-raw").write_text("-19.875\n")
+    # Inject PID reuse only after cset; all normal /proc parsing stays intact.
+    locks = path / "bridge/lib/locks.sh"
+    locks.write_text(
+        locks.read_text().replace(
+            "bridge_pid_start() {\n",
+            f"""bridge_pid_start() {{
+    if [ "$1" = {os.getpid()} ] && [ -f "$STATE_DIR/gain-written" ];then
+        printf '1\\n';return 0
+    fi
+""",
+            1,
+        )
+    )
+    assert recover(path, env, speaker_shell).returncode != 0
+    assert json.loads(journal.read_text())["sender_recovery"] is True
+    assert (path / "mixer-raw-mysoftvol").read_text().strip() == "177,177"
+    assert not (path / "sender-write-attempted").exists()
+
+
+@pytest.mark.parametrize("remote", ["-6.001", "-19.875"])
 @pytest.mark.parametrize("race", [False, True])
-def test_metadata_rounding_does_not_strand_fractional_targets_or_hide_main_updates(
-    text_device, speaker_shell, race
+def test_exact_fractional_main_and_remote_values_do_not_hide_tiny_main_updates(
+    text_device, speaker_shell, race, remote
 ):
     _, path, env = text_device
     install_shared_mixer(path)
     journal = pending_journal(path)
     (path / "sender-raw").write_text("-6.001\n")
+    (path / "committed-raw").write_text(remote + "\n")
     if race:
-        # Both values publish -6.00 in metadata, but main Volume changed.
+        # Do not round away a real change, even if its ALSA target is identical.
         (path / "next-raw").write_text("-6.002\n")
     result = recover(path, env, speaker_shell)
     assert (result.returncode != 0) is race
@@ -596,6 +781,26 @@ def test_sender_mute_is_preserved_and_cap_is_only_lifted_after_mute_ack(text_dev
     (path / "committed-raw").write_text("-6\n")
     assert recover(path, env, speaker_shell).returncode != 0
     assert not (path / "mixer-writes").exists() and journal.exists()
+    (path / "committed-raw").write_text("-144\n")
+    assert recover(path, env, speaker_shell).returncode == 0
+    assert not journal.exists()
+    assert (path / "mixer-mysoftvol").read_text().strip() == "60"
+    assert (path / "sender-raw").read_text().strip() == "-144"
+    assert not (path / "sender-write-attempted").exists()
+
+
+def test_mute_confirmation_must_still_hold_at_the_new_prewrite_observation(
+    text_device, speaker_shell
+):
+    _, path, env = text_device
+    install_shared_mixer(path)
+    journal = pending_journal(path, sender_recovery=True)
+    (path / "sender-raw").write_text("-144\n")
+    (path / "committed-raw").write_text("-144\n")
+    (path / "next-remote-read").write_text("-6\n")
+    assert recover(path, env, speaker_shell).returncode != 0
+    assert json.loads(journal.read_text())["sender_recovery"] is True
+    assert not (path / "mixer-writes").exists()
     (path / "committed-raw").write_text("-144\n")
     assert recover(path, env, speaker_shell).returncode == 0
     assert not journal.exists()
