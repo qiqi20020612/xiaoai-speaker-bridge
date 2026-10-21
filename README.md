@@ -6,9 +6,9 @@ Home Assistant 2026.10 自定义集成，以及 LX06 `/data` 下的轻量受控�
 
 **用户已确认 v0.1.6 在 LX06 上通过语音、TTS、上下文、音量恢复、AirPlay 并发、任务取消/去重、重启、31 分钟空闲及 8 次播报压力测试。v0.1.7 的精简与原生任务灯效仍需真机复验，自动化不替代硬件验收。** 升级、回滚和最小复验见 [v0.1.7 功能与代码精简说明](docs/lx06-v017.md)。
 
-**v0.2.0** 修复 HA 音量显示回弹，以及 AirPlay Duck 期间发送端调音后的 LX06 ALSA 恢复兼容问题。正式安装包见 [v0.2.0 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.2.0)，行为、离线验证与待真机验收边界见 [v0.2.0 修复记录](docs/lx06-v020.md)。
+**v0.2.1** 修复 AirPlay Duck 的恢复后置确认：Shairport 4.3.5 的 Remote 音量可能滞后，原逻辑会在 ALSA 写入和严格读回成功后仍保留 PENDING。正式安装包见 [v0.2.1 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.2.1)，源码证据、并发保护与待真机验收边界见 [恢复修复记录](docs/airplay-sender-recovery.md)。
 
-本版保留 v0.1.9 的任务取消、文字提交清空及原生历史、播放前避让、原生物理静音键，以及 v0.1.8 的语音路径优化和元数据/封面支持。历史修复与验证边界见 [v0.1.9 记录](docs/lx06-v019.md)；尚无 v0.1.7/v0.1.8 真机提速结论，见 [v0.1.8 测量与兼容性](docs/lx06-v018.md)。
+本版保留 v0.2.0 的 HA 音量显示与 ALSA 整数刻度恢复、v0.1.9 的任务取消、文字提交清空及原生历史、播放前避让、原生物理静音键，以及 v0.1.8 的语音路径优化和元数据/封面支持。历史修复与验证边界见 [v0.2.0 记录](docs/lx06-v020.md)和 [v0.1.9 记录](docs/lx06-v019.md)；尚无 v0.1.7/v0.1.8 真机提速结论，见 [v0.1.8 测量与兼容性](docs/lx06-v018.md)。
 
 ## 两端架构
 
@@ -54,7 +54,7 @@ AirPlay 音量具有只读传感器，原始 dB 保留在 API/诊断及已注册
 
 AirPlay 歌曲信息复用现有 Shairport D-Bus GetAll 与 Probe，无需开启反向控制或新增配置；封面通过原生 HA media_player 代理按需取得，音箱不复制图片。字段缺失时安全降级，进度为发送端报告加本地时钟的估算，详见 [AirPlay 元数据、封面与验证边界](docs/airplay-metadata.md)。
 
-v0.2.0 中的三个音量滑块与媒体播放器立即显示最新提交目标；失败恢复最近成功值，正常反馈错误。成功后等待可信的设备采样同步实际值，旧缓存、空值和语音/避让临时衰减不会覆盖目标。显示刷新不重发音量指令，音源路由和设备恢复保护沿用现有机制。
+v0.2.0 起，三个音量滑块与媒体播放器立即显示最新提交目标；失败恢复最近成功值，正常反馈错误。成功后等待可信的设备采样同步实际值，旧缓存、空值和语音/避让临时衰减不会覆盖目标。显示刷新不重发音量指令，音源路由和设备恢复保护沿用现有机制。
 
 ## 安装
 
@@ -79,7 +79,7 @@ HACS 添加本仓库为 **Integration** 自定义仓库并安装，重启 HA，�
 
 HACS 安装布局与本地 `brand/` 资源遵循 [HACS Integration 要求](https://www.hacs.xyz/docs/publish/integration/) 和 [HA 集成文件结构](https://developers.home-assistant.io/docs/creating_integration_file_structure/)。HACS 只安装 HA 端。安装包固定下载入口是 [GitHub Releases](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases)；尚未发版的构建可从 [CI](https://github.com/qiqi20020612/xiaoai-speaker-bridge/actions/workflows/ci.yml) 获取。仅声明已测 LX06/ARM EABI5 hard-float 兼容，音箱包须由用户审阅部署。
 
-下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS` 到同一目录，执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）。`v*` tag 经全部 CI 后才创建新 Release；手动发布也重新构建、严格校验，不能覆盖已有正式/预发布或草稿。维护者发版流程见[发布说明](docs/releases.md)。当前版本附件见 [v0.2.0 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.2.0)，回退基线附件见 [v0.1.9 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.1.9)；设备部署需另行授权。
+下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS` 到同一目录，执行 `sha256sum --check SHA256SUMS`（macOS：`shasum -a 256 --check SHA256SUMS`）。`v*` tag 经全部 CI 后才创建新 Release；手动发布也重新构建、严格校验，不能覆盖已有正式/预发布或草稿。维护者发版流程见[发布说明](docs/releases.md)。当前版本附件见 [v0.2.1 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.2.1)，回退基线附件见 [v0.2.0 Release](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.2.0)；回退会重新带回 Remote 确认问题，设备部署需另行授权。
 
 当前稳定 LX06 可从 **0.1.6 直接原地升级到 0.1.7**；保留 format=4 / hooks=4 / KWS guard=1 / AirPlay guard=3 的已审核私有副本，无需卸载、重新配对或修改旧 verified 字段。部署须在 PR 审阅和用户授权后进行，见 [v0.1.7 说明](docs/lx06-v017.md)。较早版本迁移记录见 [0.1.6](docs/lx06-v016.md) 和 [0.1.5](docs/lx06-v015.md)。
 

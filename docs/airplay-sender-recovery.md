@@ -1,6 +1,6 @@
-# v0.2.0 AirPlay Duck 后置确认修复
+# v0.2.1 AirPlay Duck 后置确认修复
 
-本项基于已发布的 `v0.2.0`（`0791c6f`），仅修复 `sender-recovery.sh` 的恢复确认，不改 ALSA 目标模型、协议、Journal 格式、Shairport 配置或正常语音/播放入口。本文描述待审阅修复，不表示已经发布或通过真机验收。
+本项基于已发布的 `v0.2.0`（`0791c6f`），仅修复 `sender-recovery.sh` 的恢复确认，不改 ALSA 目标模型、协议、Journal 格式、Shairport 配置或正常语音/播放入口。[PR #11](https://github.com/qiqi20020612/xiaoai-speaker-bridge/pull/11) 已合并为 `bdeca83`，随 v0.2.1 发布；以下源码证据与离线回归不表示已通过真机验收。
 
 ## 用户观测与离线复现
 
@@ -50,6 +50,6 @@ Remote 的写前观测必须为有限数，且在 `[-30,0]` 内或为静音值 `
 
 既有双声道读回失败、配置/TLV、HA 版本、静音/停止、SIGKILL、独立通道及语音交接测试保留；另验证稳定 Remote 不能掩盖 `Active`、版本、Profile 或进程 starttime 的变化，覆盖 Remote 合法边界、越界数值和静音确认在新写前观测失效。元数据替身默认保留完整 double，移除旧的强制两位小数假设。原“主/Remote 不等必须失败”用例改为未知观测及真实更新的拒绝场景，避免保留已经证伪的属性契约。
 
-本地与现有完整 Linux CI 的结果记录在 PR；CI 继续包含真实 jq 1.6 / BusyBox、HA 2026.10、ShellCheck、C/sanitizers、ARM hard-float / QEMU、安装恢复与包校验，不新增或修改 Review 工作流。
+最终修复的本地相关回归 319 项通过，PR 与 push 两组完整 Linux CI 各 1125 项通过，零失败、错误和跳过；自动 Code Review 无发现。报告及链接记录在 PR。CI 包含真实 jq 1.6 / BusyBox、HA 2026.10、ShellCheck、C/sanitizers、ARM hard-float / QEMU、安装恢复与包校验，不新增或修改 Review 工作流；v0.2.1 tag 仍经同一套完整 CI 后才发布。
 
-未部署或操作真实 LX06 / HA，未合并或发布。后续真机仍须验证本次稳定滞后数据能结束 Duck、连续 iPhone 调音、静音/停止、HA 新目标与语音抢占，以及实际听感和资源占用。回退使用原有安装事务和保留包，不删除 Journal、配置或私有文件；回退 v0.2.0 会重新出现本次确认问题。
+本次发布未部署或操作真实 LX06 / HA。后续真机仍须验证本次稳定滞后数据能结束 Duck、连续 iPhone 调音、静音/停止、HA 新目标与语音抢占，以及实际听感和资源占用。升级前下载同版本两端包和校验清单，保留配置、私有适配器及有效备份，按[原安装事务](install.md)原地升级；无需删除 PENDING Journal 或重配 Shairport。回退使用原有安装事务和保留包，不删除 Journal、配置或私有文件；回退 v0.2.0 会重新出现本次确认问题。
