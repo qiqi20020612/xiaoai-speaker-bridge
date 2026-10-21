@@ -1,17 +1,14 @@
-0.2.0，以已发布 v0.1.9 为基线，修复 HA 音量显示和 LX06 AirPlay Duck 恢复兼容问题。
+0.2.1，以已发布 v0.2.0 为基线，修复 Shairport Sync 4.3.5 Remote 音量滞后导致 AirPlay Duck 无法结束恢复的问题。
 
-- 项目、HA manifest 与 Bridge VERSION 同步为 0.2.0。
-- 修复 HA 音量显示回弹：主音量、播报音量、蓝牙音量和媒体播放器立即显示最新目标；失败恢复最近成功值并正常报错，成功后通过后续有效 Probe 同步实际值。
-- 保护连续设置、旧响应、空 Probe、语音/Duck 延迟应用和临时衰减；刷新显示不重发音量控制，保留既有 Store、设备版本和 Journal 恢复语义。本项运行代码仅改 HA 集成。
-- 修正文字音量指令成功回调被旧显示目标遮蔽的问题；持久化成功后同步更新显示及查询代次，后续相对操作使用新目标，失败保留原值。
-- 修正取消排队音量请求时的显示回退：恢复前一个仍在执行或排队的目标，保留相对调音的正确起点，相同目标的请求按身份独立清理。
-- 修正 HA 启动或 Bridge 重启后成功恢复持久音量的显示：同步确认目标及 Probe 边界，后续相对调音使用正确起点；保留较新的输入，不增加控制请求或持久化写入。
-- 修复 v0.1.9 在 LX06 上的 AirPlay Duck 恢复写入兼容：将不兼容的负 dB `sset` 改为按真实 ALSA TLV 量化的双声道整数 `cset`，按 Shairport/ALSA 最近刻度规则舍入，写后严格读回；失败保留 Journal，不覆盖 iPhone 最新音量。
-- 补充严格命令契约、无效 TLV、舍入、单声道/无效读回、native/sanitizers 与 ARM/QEMU 回归；原 HA 版本保护、静音/停止、锁、抢占与失败恢复继续保留。该 ALSA 修复尚未部署到真机验收。
-- 新增真实 HA 服务/实体回归，覆盖并发、失败、路由及重启同步；隔离的 v0.1.9 源码对照复现四个入口的旧显示行为。真机 HA/LX06 UI 和声音恢复仍待部署验收。
-- 行为、兼容性、验证证据和待测边界见 [v0.2.0 修复记录](https://github.com/qiqi20020612/xiaoai-speaker-bridge/blob/v0.2.0/docs/lx06-v020.md)。
-- 回退基线为 [v0.1.9](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.1.9)，回退后仍可能遇到旧版 dB 写入失败；其修复及真机边界见 [版本记录](https://github.com/qiqi20020612/xiaoai-speaker-bridge/blob/v0.1.9/docs/lx06-v019.md)。
+- 项目、HA manifest 与 Bridge VERSION 同步为 0.2.1；协议继续为 1，配置、实体 Unique ID、持久音量和 Journal 格式保持兼容。
+- 修复主 `Volume=-18`、Remote `AirplayVolume=-19.875`、ALSA `177,177` 且目标计算和严格读回成功时，`sender_recovery=true` 仍持续 PENDING 的情况。Remote 来自元数据线程对全局值的采样，可能滞后，不能作为与主值两位小数相等的应用确认。
+- 在已有 sender PENDING 分支内，允许合法 Remote 保持恢复前数值或追平当前精确主值；变成其他值、未知、空值、非有限数或越界观测继续保留 Journal。
+- 写前检查主 Volume/Active，拒绝已知过期目标写入；写后先读 Remote 再精确复查主值，检测计算后、写入中及最终查询期间的发送端再次调音，不舍入或使用容差掩盖变化。
+- 保留 iPhone 最新音量保护、PID/starttime、Profile/版本、配置/TLV、双声道整数 cset 与严格读回、Volume Lock、音量版本、HA 新目标优先、静音确认、失败恢复及 duck→voice 交接。不写 Shairport Volume 或 SetAirplayVolume。
+- 不新增常驻进程、配置或轮询，不改变 HA 音量显示、Listener、KWS、STT、TTS、LED 或 Shairport 配置。仅活跃 sender PENDING 恢复增加一次写前 Remote 查询和一次主接口查询，沿用原 600 ms 回复超时；没有真机耗时或资源改善数据。
+- 已合并修复的本地相关回归 319 项、两组完整 CI 各 1125 项通过，覆盖本次真机数据、Remote 边界/滞后/追平/变化、真实发送端再次调音的受控注入、进程身份、静音及失败保留；v0.2.1 tag 通过同一套 CI、ARM/QEMU 和包校验后才发布。
+- 详细行为、官方源码证据及未测边界见 [v0.2.1 恢复记录](https://github.com/qiqi20020612/xiaoai-speaker-bridge/blob/v0.2.1/docs/airplay-sender-recovery.md)，修复由 [PR #11](https://github.com/qiqi20020612/xiaoai-speaker-bridge/pull/11) 合并。
 
-升级前下载同版本 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS`，校验外层及包内 SHA256，保留现有配置、私有适配器和有效历史备份后按原有事务原地升级；无需卸载、重新配对或改动 Shairport 配置。协议、实体 Unique ID、持久音量与 Journal 格式兼容。失败沿用安装事务和历史包恢复，不删除恢复依据。
+升级前下载同一版本的 LX06 包、HA ZIP、`RELEASE_NOTES.md` 与 `SHA256SUMS`，核验外层及包内 SHA256，保留配置、私有适配器和有效历史备份，沿用原安装事务原地升级。无需卸载、重新配对、清除 PENDING Journal 或改动 Shairport 配置。失败保留恢复依据，使用原安装事务及历史包回滚；回退到 [v0.2.0](https://github.com/qiqi20020612/xiaoai-speaker-bridge/releases/tag/v0.2.0) 会重新带回 Remote 确认问题。
 
-完整 CI 及两端打包流程校验自动化回归、ARM ABI、版本和包内文件。上述结果来自离线合成环境与 QEMU，新 ALSA 写入、HA 显示及听感仍需 LX06 真机复验。本次发布不包含真实 LX06 或 Home Assistant 的部署。
+上述证据来自用户观测、官方源码和离线合成/QEMU 环境，不是修复后的真机验收。LX06 的连续 iPhone 调音、静音/停止、HA 新目标、语音抢占、听感及资源占用仍待真机复验。本次发布不包含真实 LX06 或 Home Assistant 的部署。
